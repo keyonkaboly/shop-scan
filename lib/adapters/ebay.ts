@@ -20,12 +20,18 @@ async function getAccessToken(): Promise<string> {
   return cachedToken.value;
 }
 
-function conditionCode(condition: Condition): "1000" | "3000" | undefined {
-  return condition === "new" ? "1000" : condition === "used" ? "3000" : undefined;
+function conditionCodes(condition: Condition): string[] {
+  if (condition === "new") return ["1000", "1500", "1750"];
+  if (condition === "used") return ["3000", "4000", "5000", "6000"];
+  return [];
 }
 
 function mapCondition(conditionId?: string): Listing["condition"] {
-  return conditionId === "1000" ? "new" : conditionId ? "used" : "unknown";
+  return conditionId && ["1000", "1500", "1750"].includes(conditionId) ? "new" : conditionId ? "used" : "unknown";
+}
+
+function parseSize(value: string): number {
+  return Number(value.replace(/\s+1\/2$/, ".5"));
 }
 
 export const ebayAdapter: SourceAdapter = {
@@ -33,9 +39,9 @@ export const ebayAdapter: SourceAdapter = {
   sourceType: "api",
   async search(params: ScanParams): Promise<Listing[]> {
     const token = await getAccessToken();
-    const code = conditionCode(params.condition);
-    const query = new URLSearchParams({ q: "maison margiela replica gat", limit: "50" });
-    if (code) query.set("filter", `conditionIds:{${code}}`);
+    const codes = conditionCodes(params.condition);
+    const query = new URLSearchParams({ q: "maison margiela replica gat", limit: "200" });
+    if (codes.length) query.set("filter", `conditionIds:{${codes.join("|")}}`);
     const response = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${query}`, {
       headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
     });
@@ -45,17 +51,17 @@ export const ebayAdapter: SourceAdapter = {
       const title = item.title ?? "";
       const lowerTitle = title.toLowerCase();
       if (!lowerTitle.includes("margiela") || (!lowerTitle.includes("gat") && !lowerTitle.includes("german army"))) return [];
-      const euMatch = lowerTitle.match(/\b(?:eu|it)\s*(3[8-9](?:\.5)?|4[0-5](?:\.5)?)\b/);
-      const usMatch = lowerTitle.match(/\bus\s*(5(?:\.5)?|6(?:\.5)?|7(?:\.5)?|8(?:\.5)?|9(?:\.5)?|10(?:\.5)?|11(?:\.5)?|12)\b/);
-      const sizeIT = euMatch ? Number(euMatch[1]) : null;
-      const sizeUS = usMatch ? Number(usMatch[1]) : null;
+      const euMatch = lowerTitle.match(/\b(?:eu|it|size)\s*(3[8-9](?:\.5|\s+1\/2)?|4[0-5](?:\.5|\s+1\/2)?)\b/);
+      const usMatch = lowerTitle.match(/\bus\s*(5(?:\.5|\s+1\/2)?|6(?:\.5|\s+1\/2)?|7(?:\.5|\s+1\/2)?|8(?:\.5|\s+1\/2)?|9(?:\.5|\s+1\/2)?|10(?:\.5|\s+1\/2)?|11(?:\.5|\s+1\/2)?|12)\b/);
+      const sizeIT = euMatch ? parseSize(euMatch[1]) : null;
+      const sizeUS = usMatch ? parseSize(usMatch[1]) : null;
       const hasRequestedSize = sizeIT !== null && sizeUS !== null
         ? sizeIT === params.sizeIT && sizeUS === params.sizeUS
         : (sizeIT !== null && sizeIT === params.sizeIT) || (sizeUS !== null && sizeUS === params.sizeUS);
       if (!hasRequestedSize) return [];
       const price = item.price?.value ? Number(item.price.value) : NaN;
       if (!Number.isFinite(price)) return [];
-      return [{ marketplace: "eBay", title, price, currency: item.price?.currency ?? "USD", condition: mapCondition(item.conditionId), sizeIT, sizeUS, url: item.itemWebUrl ?? ebaySearchUrl(code), imageUrl: item.image?.imageUrl ?? null, scrapedAt: new Date().toISOString(), sourceType: "api" as const }];
+      return [{ marketplace: "eBay", title, price, currency: item.price?.currency ?? "USD", condition: mapCondition(item.conditionId), sizeIT, sizeUS, url: item.itemWebUrl ?? ebaySearchUrl(codes[0] as "1000" | "3000" | undefined), imageUrl: item.image?.imageUrl ?? null, scrapedAt: new Date().toISOString(), sourceType: "api" as const }];
     });
   },
 };
