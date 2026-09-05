@@ -4,7 +4,7 @@ import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
 import { makeRetailStubAdapter } from "@/lib/adapters/retail-affiliate-stub";
-import { convertToCAD } from "@/lib/currency";
+import { getRateToCAD } from "@/lib/currency";
 import type { Condition, Listing } from "@/lib/adapters/types";
 
 export const runtime = "nodejs";
@@ -49,7 +49,12 @@ export async function GET(request: NextRequest) {
     else failures.push(adapters[index].name);
   });
 
-  const listingsWithCAD = await Promise.all(listings.map(async (listing) => ({ ...listing, cadPrice: await convertToCAD(listing.price, listing.currency) })));
+  const currencies = [...new Set(listings.map((listing) => listing.currency))];
+  const rates = new Map(await Promise.all(currencies.map(async (currency) => [currency, await getRateToCAD(currency)] as const)));
+  const listingsWithCAD = listings.map((listing) => {
+    const rate = rates.get(listing.currency);
+    return { ...listing, cadPrice: rate === null || rate === undefined ? null : Number((listing.price * rate).toFixed(2)) };
+  });
   listingsWithCAD.sort((first, second) => (first.cadPrice ?? Number.POSITIVE_INFINITY) - (second.cadPrice ?? Number.POSITIVE_INFINITY));
   return NextResponse.json({
     scannedAt: new Date().toISOString(),
