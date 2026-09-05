@@ -71,7 +71,7 @@ export default function Home() {
     const listing = row.listing;
     const originalPrice = formatMoney(listing.price, listing.currency);
     const cadPrice = listing.cadPrice == null ? "CAD unavailable" : `(${formatMoney(listing.cadPrice, "CAD")})`;
-    return <a className="listing-row" href={listing.url} target="_blank" rel="noopener noreferrer" key={`${listing.marketplace}-${listing.url}`}><span className="listing-rank">{String(resultPage * pageSize + index + 1).padStart(2, "0")}</span><span className="listing-image" aria-hidden="true"><span /></span><span className="listing-info"><strong>{listing.marketplace}</strong><span>{listing.title}</span></span><span className="listing-badge">{listing.sourceType === "api" ? "Live API" : "Live scan"}</span><span className="listing-price">{originalPrice} <small>{cadPrice}</small></span><span className="listing-arrow">↗</span></a>;
+    return <a className="listing-row" href={listing.url} target="_blank" rel="noopener noreferrer" key={`${listing.marketplace}-${listing.url}`}><span className="listing-rank">{String(resultPage * pageSize + index + 1).padStart(2, "0")}</span><span className="listing-image">{listing.imageUrl ? <img src={listing.imageUrl} alt={`${listing.marketplace} listing: ${listing.title}`} loading="lazy" /> : <span aria-hidden="true" />}</span><span className="listing-info"><strong>{listing.marketplace}</strong><span>{listing.title}</span></span><span className="listing-badge">{listing.sourceType === "api" ? "Live API" : "Live scan"}</span><span className="listing-price">{originalPrice} <small>{cadPrice}</small></span><span className="listing-arrow">↗</span></a>;
   };
 
   return <main className="site-shell">
