@@ -8,7 +8,7 @@ export async function convertToCAD(amount: number, currency: string): Promise<nu
   if (cached && cached.expiresAt > Date.now()) return Number((amount * cached.rate).toFixed(2));
 
   try {
-    const response = await fetch(`https://api.frankfurter.app/latest?from=${encodeURIComponent(code)}&to=CAD`, { signal: AbortSignal.timeout(3000), cache: "no-store" });
+    const response = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(code)}`, { signal: AbortSignal.timeout(3000), cache: "no-store" });
     if (!response.ok) return null;
     const data = await response.json() as { rates?: { CAD?: number } };
     const rate = data.rates?.CAD;
