@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { cettireSearchUrl, endClothingSearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
+import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
 
 const sizes = [[38, 5], [38.5, 5.5], [39, 6], [39.5, 6.5], [40, 7], [40.5, 7.5], [41, 8], [41.5, 8.5], [42, 9], [42.5, 9.5], [43, 10], [43.5, 10.5], [44, 11], [44.5, 11.5], [45, 12]] as const;
 type Condition = "new" | "used" | "either";
 type Listing = { marketplace: string; title: string; price: number; currency: string; condition: "new" | "used" | "unknown"; sizeUS: number | null; sizeIT: number | null; url: string; imageUrl: string | null; sourceType: "api" | "scrape" | "affiliate-feed" | "search-link-only" };
-type ScanResponse = { listings: Listing[]; unavailableSources: string[]; scannedAt: string };
-type ResultRow = { type: "live"; listing: Listing } | { type: "manual"; name: string; url: string };
+type ScanResponse = { listings: Listing[]; unavailableSources: string[]; scannedAt: string; sourceStatus?: { eBay?: string }; fallbackSearches?: { eBay?: string } };
+type ResultRow = { type: "live"; listing: Listing } | { type: "manual"; name: string; url: string; status?: string };
 const manualSources = [["Farfetch", farfetchSearchUrl()], ["SSENSE", ssenseSearchUrl()], ["Mytheresa", mytheresaSearchUrl()], ["Cettire", cettireSearchUrl()], ["MR PORTER", mrPorterSearchUrl()], ["END.", endClothingSearchUrl()]] as const;
 
 export default function Home() {
@@ -21,7 +21,9 @@ export default function Home() {
   const sizeUS = sizes[sizeIndex][1];
   const unavailable = new Set(scan.unavailableSources);
   const liveListings = scan.listings;
-  const resultRows: ResultRow[] = [...liveListings.map((listing) => ({ type: "live" as const, listing })), ...manualSources.filter(([name]) => unavailable.has(name)).map(([name, url]) => ({ type: "manual" as const, name, url }))];
+  const ebayHasListing = liveListings.some((listing) => listing.marketplace === "eBay");
+  const ebayFallback: ResultRow[] = !ebayHasListing && !isLoading ? [{ type: "manual", name: "eBay", url: scan.fallbackSearches?.eBay ?? ebaySearchUrl(condition === "new" ? "1000" : condition === "used" ? "3000" : undefined), status: scan.sourceStatus?.eBay === "unavailable" ? "API unavailable" : "Live API checked · no verified match" }] : [];
+  const resultRows: ResultRow[] = [...liveListings.map((listing) => ({ type: "live" as const, listing })), ...ebayFallback, ...manualSources.filter(([name]) => unavailable.has(name)).map(([name, url]) => ({ type: "manual" as const, name, url }))];
   const pageSize = 10;
   const pageCount = Math.max(1, Math.ceil(resultRows.length / pageSize));
   const visibleRows = resultRows.slice(resultPage * pageSize, (resultPage + 1) * pageSize);
@@ -61,7 +63,7 @@ export default function Home() {
     setSizeIndex(next);
   };
   const renderRow = (row: ResultRow, index: number) => {
-    if (row.type === "manual") return <a className="listing-row manual-row" href={row.url} target="_blank" rel="noopener noreferrer" key={row.name}><span className="listing-rank">M{index + 1}</span><span className="listing-image manual-image" aria-hidden="true">↗</span><span className="listing-info"><strong>{row.name}</strong><span>Affiliate feed not connected</span></span><span className="listing-badge">Search manually</span><span className="listing-price">—</span><span className="listing-arrow">↗</span></a>;
+    if (row.type === "manual") return <a className="listing-row manual-row" href={row.url} target="_blank" rel="noopener noreferrer" key={row.name}><span className="listing-rank">M{index + 1}</span><span className="listing-image manual-image" aria-hidden="true">↗</span><span className="listing-info"><strong>{row.name}</strong><span>{row.status ?? "Affiliate feed not connected"}</span></span><span className="listing-badge">{row.name === "eBay" ? "Check search" : "Search manually"}</span><span className="listing-price">—</span><span className="listing-arrow">↗</span></a>;
     const listing = row.listing;
     return <a className="listing-row" href={listing.url} target="_blank" rel="noopener noreferrer" key={`${listing.marketplace}-${listing.url}`}><span className="listing-rank">{String(resultPage * pageSize + index + 1).padStart(2, "0")}</span><span className="listing-image" aria-hidden="true"><span /></span><span className="listing-info"><strong>{listing.marketplace}</strong><span>{listing.title}</span></span><span className="listing-badge">{listing.sourceType === "api" ? "Live API" : "Live scan"}</span><span className="listing-price">{listing.currency} {listing.price}</span><span className="listing-arrow">↗</span></a>;
   };

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cettireSearchUrl, endClothingSearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
+import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
@@ -55,5 +55,13 @@ export async function GET(request: NextRequest) {
     listings,
     liveSourceCount: new Set(listings.map((listing) => listing.marketplace)).size,
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
+    sourceStatus: {
+      eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
+      Grailed: failures.includes("Grailed") ? "unavailable" : "checked-no-match",
+      retail: "search-link-only",
+    },
+    fallbackSearches: {
+      eBay: ebaySearchUrl(condition === "new" ? "1000" : condition === "used" ? "3000" : undefined),
+    },
   });
 }
