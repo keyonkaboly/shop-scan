@@ -4,6 +4,7 @@ import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
 import { makeRetailStubAdapter } from "@/lib/adapters/retail-affiliate-stub";
+import { convertToCAD } from "@/lib/currency";
 import type { Condition, Listing } from "@/lib/adapters/types";
 
 export const runtime = "nodejs";
@@ -48,12 +49,13 @@ export async function GET(request: NextRequest) {
     else failures.push(adapters[index].name);
   });
 
-  listings.sort((first, second) => first.price - second.price);
+  const listingsWithCAD = await Promise.all(listings.map(async (listing) => ({ ...listing, cadPrice: await convertToCAD(listing.price, listing.currency) })));
+  listingsWithCAD.sort((first, second) => (first.cadPrice ?? Number.POSITIVE_INFINITY) - (second.cadPrice ?? Number.POSITIVE_INFINITY));
   return NextResponse.json({
     scannedAt: new Date().toISOString(),
     params: { sizeIT, sizeUS, condition },
-    listings,
-    liveSourceCount: new Set(listings.map((listing) => listing.marketplace)).size,
+    listings: listingsWithCAD,
+    liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
     sourceStatus: {
       eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
