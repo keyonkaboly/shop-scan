@@ -19,6 +19,18 @@ const retailStubs = [
 
 const conditionValues: Condition[] = ["new", "used", "either"];
 
+async function searchWithTimeout(adapter: (typeof retailStubs)[number] | typeof ebayAdapter | typeof grailedAdapter, params: { sizeIT: number; sizeUS: number; condition: Condition }, timeoutMs: number) {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${adapter.name} scan timed out`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([adapter.search(params), timeout]);
+  } finally {
+    clearTimeout(timeoutId!);
+  }
+}
+
 export async function GET(request: NextRequest) {
   const params = new URL(request.url).searchParams;
   const requestedIT = Number(params.get("sizeIT") ?? 42);
@@ -27,7 +39,7 @@ export async function GET(request: NextRequest) {
   const condition = conditionValues.includes(requestedCondition as Condition) ? requestedCondition as Condition : "either";
   const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
   const adapters = [ebayAdapter, grailedAdapter, ...retailStubs];
-  const settled = await Promise.allSettled(adapters.map((adapter) => adapter.search({ sizeIT, sizeUS, condition })));
+  const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapter.name === "eBay" ? 8000 : 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
 
