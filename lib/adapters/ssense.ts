@@ -1,6 +1,26 @@
-import type { Browser } from "playwright";
+import type { Browser } from "playwright-core";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
+
+// Vercel's serverless functions don't ship a real Chromium binary, so the
+// full `playwright` package (which bundles one) only works for local dev.
+// In production we hand playwright-core a Lambda-sized Chromium build
+// instead (@sparticuz/chromium) — same Playwright API, just pointed at a
+// binary that actually fits and runs in that environment.
+async function launchBrowser(): Promise<Browser> {
+  const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION);
+  if (isServerless) {
+    const chromium = (await import("@sparticuz/chromium")).default;
+    const { chromium: playwrightChromium } = await import("playwright-core");
+    return playwrightChromium.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(),
+      headless: true,
+    });
+  }
+  const { chromium: localChromium } = await import("playwright");
+  return localChromium.launch({ headless: true });
+}
 
 // SSENSE embeds a schema.org Product JSON-LD block per result card (meant for
 // search-engine rich snippets) — reading that directly is far more reliable
@@ -95,8 +115,7 @@ export const ssenseAdapter: SourceAdapter = {
   sourceType: "scrape",
   async search(params: ScanParams): Promise<Listing[]> {
     if (params.condition === "used") return [];
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch({ headless: true });
+    const browser = await launchBrowser();
     try {
       const page = await browser.newPage({ userAgent: "Mozilla/5.0 (compatible; MargielaFinder/1.0)" });
       await page.goto(ssenseSearchUrl(), { waitUntil: "networkidle", timeout: 20000 });
