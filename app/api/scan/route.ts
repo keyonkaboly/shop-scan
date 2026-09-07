@@ -44,10 +44,15 @@ export async function GET(request: NextRequest) {
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
+  const sourceErrors: Record<string, string> = {};
 
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") listings.push(...result.value);
-    else failures.push(adapters[index].name);
+    else {
+      failures.push(adapters[index].name);
+      sourceErrors[adapters[index].name] = result.reason instanceof Error ? (result.reason.stack ?? result.reason.message) : String(result.reason);
+      console.error(`[scan] ${adapters[index].name} failed:`, result.reason);
+    }
   });
 
   const currencies = [...new Set(listings.map((listing) => listing.currency))];
@@ -63,6 +68,7 @@ export async function GET(request: NextRequest) {
     listings: listingsWithCAD,
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
+    sourceErrors,
     sourceStatus: {
       eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
       Grailed: failures.includes("Grailed") ? "unavailable" : listings.some((listing) => listing.marketplace === "Grailed") ? "live" : "checked-no-match",
