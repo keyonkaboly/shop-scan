@@ -72,6 +72,24 @@ async function checkSizeInStock(browser: Browser, url: string, sizeIT: number): 
   }
 }
 
+// Checking every candidate concurrently opens one Chromium tab per candidate
+// at once — fine for a handful, but with no cap on candidate count that can
+// spike to 20-30+ simultaneous tabs, and the resulting resource contention
+// occasionally pushes total time past the adapter's timeout budget, silently
+// dropping the whole batch. Processing in small batches keeps peak
+// concurrency (and thus timing) predictable.
+const CHECK_BATCH_SIZE = 6;
+
+async function checkAllSizes<T extends { url: string }>(browser: Browser, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
+  const results: (T & { inStock: boolean | null })[] = [];
+  for (let i = 0; i < candidates.length; i += CHECK_BATCH_SIZE) {
+    const batch = candidates.slice(i, i + CHECK_BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(browser, candidate.url, sizeIT) })));
+    results.push(...batchResults);
+  }
+  return results;
+}
+
 export const ssenseAdapter: SourceAdapter = {
   name: "SSENSE",
   sourceType: "scrape",
@@ -107,7 +125,7 @@ export const ssenseAdapter: SourceAdapter = {
         }];
       }).sort((first, second) => first.price - second.price);
 
-      const checked = await Promise.all(candidates.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(browser, candidate.url, params.sizeIT) })));
+      const checked = await checkAllSizes(browser, candidates, params.sizeIT);
 
       return checked.flatMap((candidate) => {
         if (candidate.inStock !== true) return [];
