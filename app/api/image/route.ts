@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const allowedHosts = new Set(["i.ebayimg.com", "thumbs.grailed.com"]);
+const allowedHosts = new Set(["i.ebayimg.com", "thumbs.grailed.com", "img.ssensemedia.com"]);
 
 export async function GET(request: NextRequest) {
   const rawUrl = request.nextUrl.searchParams.get("url");

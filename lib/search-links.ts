@@ -1,4 +1,4 @@
-const QUERY = "maison margiela replica gat";
+const QUERY = "maison margiela replica sneaker";
 
 export function ebaySearchUrl(conditionCode?: "1000" | "3000"): string {
   const base = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(QUERY)}`;
