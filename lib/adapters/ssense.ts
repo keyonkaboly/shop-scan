@@ -12,9 +12,8 @@ import { ssenseSearchUrl } from "../search-links";
 // session, so a real page load per product is the only reliable way in) to
 // read its embedded `sizes` array and confirm the requested IT size is
 // actually in stock. Anything that can't be confirmed in-stock in that exact
-// size is dropped rather than shown as a guess — a sanity cap just guards
-// against an unexpectedly huge result set opening too many tabs at once.
-const MAX_SIZE_CHECKS = 30;
+// size is dropped rather than shown as a guess. No cap on how many
+// candidates get checked — every match is verified.
 
 interface SsenseProduct {
   name: string;
@@ -108,7 +107,7 @@ export const ssenseAdapter: SourceAdapter = {
         }];
       }).sort((first, second) => first.price - second.price);
 
-      const checked = await Promise.all(candidates.slice(0, MAX_SIZE_CHECKS).map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(browser, candidate.url, params.sizeIT) })));
+      const checked = await Promise.all(candidates.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(browser, candidate.url, params.sizeIT) })));
 
       return checked.flatMap((candidate) => {
         if (candidate.inStock !== true) return [];
