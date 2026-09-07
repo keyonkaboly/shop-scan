@@ -34,20 +34,40 @@ function parseSize(value: string): number {
   return Number(value.replace(/\s+1\/2$/, ".5"));
 }
 
+interface EbayItem { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string }; qualifiedPrograms?: string[] }
+
+const PAGE_SIZE = 200;
+const MAX_ITEMS = 1000; // safety cap — this niche runs ~400-500 total, this leaves headroom without risking a runaway number of calls
+
+async function fetchPage(query: URLSearchParams, token: string): Promise<{ items: EbayItem[]; total: number }> {
+  const response = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${query}`, {
+    headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
+  });
+  if (!response.ok) return { items: [], total: 0 };
+  const data = await response.json();
+  return { items: data.itemSummaries ?? [], total: data.total ?? 0 };
+}
+
 export const ebayAdapter: SourceAdapter = {
   name: "eBay",
   sourceType: "api",
   async search(params: ScanParams): Promise<Listing[]> {
     const token = await getAccessToken();
     const codes = conditionCodes(params.condition);
-    const query = new URLSearchParams({ q: "maison margiela replica gat", limit: "200", fieldgroups: "EXTENDED" });
-    if (codes.length) query.set("filter", `conditionIds:{${codes.join("|")}}`);
-    const response = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${query}`, {
-      headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
-    });
-    if (!response.ok) return [];
-    const data = await response.json();
-    return (data.itemSummaries ?? []).flatMap((item: { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string }; qualifiedPrograms?: string[] }) => {
+    const buildQuery = (offset: number) => {
+      const query = new URLSearchParams({ q: "maison margiela replica gat", limit: String(PAGE_SIZE), offset: String(offset), fieldgroups: "EXTENDED" });
+      if (codes.length) query.set("filter", `conditionIds:{${codes.join("|")}}`);
+      return query;
+    };
+
+    const first = await fetchPage(buildQuery(0), token);
+    const total = Math.min(first.total, MAX_ITEMS);
+    const remainingOffsets: number[] = [];
+    for (let offset = PAGE_SIZE; offset < total; offset += PAGE_SIZE) remainingOffsets.push(offset);
+    const restPages = await Promise.all(remainingOffsets.map((offset) => fetchPage(buildQuery(offset), token)));
+    const items: EbayItem[] = [first.items, ...restPages.map((page) => page.items)].flat();
+
+    return items.flatMap((item) => {
       const title = item.title ?? "";
       const lowerTitle = title.toLowerCase();
       if (!lowerTitle.includes("margiela") || (!lowerTitle.includes("gat") && !lowerTitle.includes("german army"))) return [];

@@ -47,7 +47,7 @@ export const grailedAdapter: SourceAdapter = {
         "x-algolia-application-id": ALGOLIA_APP_ID,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ query: QUERY, hitsPerPage: 50, ...(filters ? { filters } : {}) }),
+      body: JSON.stringify({ query: QUERY, hitsPerPage: 1000, ...(filters ? { filters } : {}) }),
     });
     if (!response.ok) throw new Error(`Grailed search failed: ${response.status}`);
     const data = await response.json() as { hits: GrailedHit[] };
