@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   const condition = conditionValues.includes(requestedCondition as Condition) ? requestedCondition as Condition : "either";
   const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
   const adapters = [ebayAdapter, grailedAdapter, ssenseAdapter, ...retailStubs];
-  const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 25000 };
+  const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 40000 };
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];

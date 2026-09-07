@@ -52,7 +52,7 @@ export default function Home() {
     const deadline = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, 28000);
+    }, 45000);
     const timer = window.setTimeout(async () => {
       setIsLoading(true);
       setError("");
