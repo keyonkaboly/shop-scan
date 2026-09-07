@@ -20,9 +20,6 @@ export default function Terms() {
     <h2>No warranty on listings</h2>
     <p>Prices, sizes, condition, and availability shown on Gat Scan are sourced live from third parties (eBay, Grailed, and retail partners) and can change or be wrong by the time you click through. We don&rsquo;t guarantee accuracy, and a listing appearing here is not a guarantee it is genuine, in stock, or correctly priced on the retailer&rsquo;s site.</p>
 
-    <h2>Affiliate links</h2>
-    <p>Some links on this site are affiliate links, and we may earn a commission on purchases made after clicking one, at no extra cost to you. See our <Link href="/privacy">Privacy Policy</Link> for details.</p>
-
     <h2>Acceptable use</h2>
     <p>Don&rsquo;t scrape, rate-limit-abuse, or attempt to disrupt Gat Scan&rsquo;s servers or the third-party APIs it relies on.</p>
 

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import CookieConsent from "@/components/CookieConsent";
 import { getBaseUrl } from "@/lib/site";
 
 const title = "Gat Scan — Find your dream pair.";
@@ -17,5 +16,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
-  return <html lang="en"><body>{children}<CookieConsent /></body></html>;
+  return <html lang="en"><body>{children}</body></html>;
 }

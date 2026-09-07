@@ -1,4 +1,4 @@
-const QUERY = "maison margiela replica sneaker";
+export const QUERY = "maison margiela replica sneaker";
 
 export function ebaySearchUrl(conditionCode?: "1000" | "3000"): string {
   const base = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(QUERY)}`;
@@ -10,7 +10,7 @@ export function grailedSearchUrl(): string {
 }
 
 export function farfetchSearchUrl(): string {
-  return `https://www.farfetch.com/shopping/search/items.aspx?q=${encodeURIComponent(QUERY)}`;
+  return "https://lasso.to/pr5Vskbg0H/";
 }
 
 export function ssenseSearchUrl(): string {

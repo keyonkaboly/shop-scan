@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
+import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
+import { ssenseAdapter } from "@/lib/adapters/ssense";
 import { makeRetailStubAdapter } from "@/lib/adapters/retail-affiliate-stub";
 import { getRateToCAD } from "@/lib/currency";
 import type { Condition, Listing } from "@/lib/adapters/types";
@@ -11,7 +12,6 @@ export const runtime = "nodejs";
 
 const retailStubs = [
   makeRetailStubAdapter("Farfetch", farfetchSearchUrl()),
-  makeRetailStubAdapter("SSENSE", ssenseSearchUrl()),
   makeRetailStubAdapter("Mytheresa", mytheresaSearchUrl()),
   makeRetailStubAdapter("Cettire", cettireSearchUrl()),
   makeRetailStubAdapter("MR PORTER", mrPorterSearchUrl()),
@@ -20,7 +20,7 @@ const retailStubs = [
 
 const conditionValues: Condition[] = ["new", "used", "either"];
 
-async function searchWithTimeout(adapter: (typeof retailStubs)[number] | typeof ebayAdapter | typeof grailedAdapter, params: { sizeIT: number; sizeUS: number; condition: Condition }, timeoutMs: number) {
+async function searchWithTimeout(adapter: (typeof retailStubs)[number] | typeof ebayAdapter | typeof grailedAdapter | typeof ssenseAdapter, params: { sizeIT: number; sizeUS: number; condition: Condition }, timeoutMs: number) {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(`${adapter.name} scan timed out`)), timeoutMs);
@@ -39,8 +39,9 @@ export async function GET(request: NextRequest) {
   const requestedCondition = params.get("condition") ?? "either";
   const condition = conditionValues.includes(requestedCondition as Condition) ? requestedCondition as Condition : "either";
   const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
-  const adapters = [ebayAdapter, grailedAdapter, ...retailStubs];
-  const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapter.name === "eBay" ? 8000 : 4000)));
+  const adapters = [ebayAdapter, grailedAdapter, ssenseAdapter, ...retailStubs];
+  const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 25000 };
+  const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
 
@@ -64,7 +65,8 @@ export async function GET(request: NextRequest) {
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
     sourceStatus: {
       eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
-      Grailed: failures.includes("Grailed") ? "unavailable" : "checked-no-match",
+      Grailed: failures.includes("Grailed") ? "unavailable" : listings.some((listing) => listing.marketplace === "Grailed") ? "live" : "checked-no-match",
+      SSENSE: failures.includes("SSENSE") ? "unavailable" : listings.some((listing) => listing.marketplace === "SSENSE") ? "live" : "checked-no-match",
       retail: "search-link-only",
     },
     fallbackSearches: {

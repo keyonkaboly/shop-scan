@@ -18,6 +18,7 @@ export interface Listing {
   imageUrl: string | null;
   scrapedAt: string;
   sourceType: "api" | "scrape" | "affiliate-feed" | "search-link-only";
+  authenticityGuaranteed?: boolean;
 }
 
 export interface SourceAdapter {

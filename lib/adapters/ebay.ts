@@ -40,14 +40,14 @@ export const ebayAdapter: SourceAdapter = {
   async search(params: ScanParams): Promise<Listing[]> {
     const token = await getAccessToken();
     const codes = conditionCodes(params.condition);
-    const query = new URLSearchParams({ q: "maison margiela replica gat", limit: "200" });
+    const query = new URLSearchParams({ q: "maison margiela replica gat", limit: "200", fieldgroups: "EXTENDED" });
     if (codes.length) query.set("filter", `conditionIds:{${codes.join("|")}}`);
     const response = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${query}`, {
       headers: { Authorization: `Bearer ${token}`, "X-EBAY-C-MARKETPLACE-ID": "EBAY_US" },
     });
     if (!response.ok) return [];
     const data = await response.json();
-    return (data.itemSummaries ?? []).flatMap((item: { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string } }) => {
+    return (data.itemSummaries ?? []).flatMap((item: { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string }; qualifiedPrograms?: string[] }) => {
       const title = item.title ?? "";
       const lowerTitle = title.toLowerCase();
       if (!lowerTitle.includes("margiela") || (!lowerTitle.includes("gat") && !lowerTitle.includes("german army"))) return [];
@@ -61,7 +61,8 @@ export const ebayAdapter: SourceAdapter = {
       if (!hasRequestedSize) return [];
       const price = item.price?.value ? Number(item.price.value) : NaN;
       if (!Number.isFinite(price)) return [];
-      return [{ marketplace: "eBay", title, price, currency: item.price?.currency ?? "USD", condition: mapCondition(item.conditionId), sizeIT, sizeUS, url: item.itemWebUrl ?? ebaySearchUrl(codes[0] as "1000" | "3000" | undefined), imageUrl: item.image?.imageUrl ?? null, scrapedAt: new Date().toISOString(), sourceType: "api" as const }];
+      const authenticityGuaranteed = Array.isArray(item.qualifiedPrograms) && item.qualifiedPrograms.some((program) => program === "AUTHENTICITY_GUARANTEE" || program === "AUTHENTICITY_VERIFICATION");
+      return [{ marketplace: "eBay", title, price, currency: item.price?.currency ?? "USD", condition: mapCondition(item.conditionId), sizeIT, sizeUS, url: item.itemWebUrl ?? ebaySearchUrl(codes[0] as "1000" | "3000" | undefined), imageUrl: item.image?.imageUrl ?? null, scrapedAt: new Date().toISOString(), sourceType: "api" as const, authenticityGuaranteed }];
     });
   },
 };

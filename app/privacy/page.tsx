@@ -3,7 +3,7 @@ import Link from "next/link";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — Gat Scan",
-  description: "How Gat Scan handles data, cookies, and third-party affiliate links.",
+  description: "How Gat Scan handles data and third-party data sources.",
 };
 
 export default function PrivacyPolicy() {
@@ -18,10 +18,7 @@ export default function PrivacyPolicy() {
     <p>Gat Scan has no accounts and no sign-up. When you use the size and condition selectors, your browser sends that selection to our server so we can run a live search — it is not stored or logged against you. We do not collect names, emails, or payment details on this site.</p>
 
     <h2>Cookies and local storage</h2>
-    <p>We use your browser&rsquo;s local storage only to remember that you dismissed the cookie notice. We do not set first-party tracking or advertising cookies ourselves. If you click through to a retailer (eBay, Grailed, Farfetch, SSENSE, Mytheresa, Cettire, MR PORTER, END., or others), that retailer or its affiliate network may set its own cookie to attribute the visit — that is governed by their privacy policy, not ours.</p>
-
-    <h2>Affiliate disclosure</h2>
-    <p>Some outbound links on Gat Scan are, or will become, affiliate links. If you follow one and make a purchase, we may earn a commission at no extra cost to you. This never affects which listing we show first — ranking is based on live price only.</p>
+    <p>We do not set first-party tracking or advertising cookies ourselves. If you click through to a retailer (eBay, Grailed, Farfetch, SSENSE, Mytheresa, Cettire, MR PORTER, END., or others), that retailer may set its own cookie on its own site — that is governed by their privacy policy, not ours.</p>
 
     <h2>Third-party data sources</h2>
     <p>Listing data is fetched live from eBay&rsquo;s Browse API and, best-effort, from Grailed. Listing thumbnails are proxied through our own server from eBay/Grailed image hosts so your browser never contacts those hosts directly. Currency conversion uses a third-party exchange-rate provider.</p>
