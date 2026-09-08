@@ -2,21 +2,18 @@ import type { Browser } from "playwright-core";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
 
-// Vercel's serverless functions don't ship a real Chromium binary, so the
-// full `playwright` package (which bundles one) only works for local dev.
-// In production we hand playwright-core a Lambda-sized Chromium build
-// instead (@sparticuz/chromium) — same Playwright API, just pointed at a
-// binary that actually fits and runs in that environment.
+// Running headless Chromium inside a Vercel serverless function needs more
+// memory than the Hobby plan allows configuring (Pro/Enterprise-only), so
+// the browser runs on Browserless's infrastructure instead — Playwright just
+// connects to it over a WebSocket, no local binary involved. Falls back to a
+// real local browser (via the full `playwright` package, a devDependency)
+// when no BROWSERLESS_API_KEY is configured, so local dev works without
+// signing up for anything.
 async function launchBrowser(): Promise<Browser> {
-  const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION);
-  if (isServerless) {
-    const chromium = (await import("@sparticuz/chromium")).default;
-    const { chromium: playwrightChromium } = await import("playwright-core");
-    return playwrightChromium.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    });
+  const apiKey = process.env.BROWSERLESS_API_KEY;
+  if (apiKey) {
+    const { chromium } = await import("playwright-core");
+    return chromium.connect(`wss://production-sfo.browserless.io/chromium/playwright?token=${apiKey}`);
   }
   const { chromium: localChromium } = await import("playwright");
   return localChromium.launch({ headless: true });
