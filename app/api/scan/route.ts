@@ -6,6 +6,7 @@ import { grailedAdapter } from "@/lib/adapters/grailed";
 import { ssenseAdapter } from "@/lib/adapters/ssense";
 import { makeRetailStubAdapter } from "@/lib/adapters/retail-affiliate-stub";
 import { getRateToCAD } from "@/lib/currency";
+import { clientIp, isRateLimited } from "@/lib/rate-limit";
 import type { Condition, Listing } from "@/lib/adapters/types";
 
 export const runtime = "nodejs";
@@ -33,6 +34,9 @@ async function searchWithTimeout(adapter: (typeof retailStubs)[number] | typeof 
 }
 
 export async function GET(request: NextRequest) {
+  if (isRateLimited(clientIp(request), 10, 60_000)) {
+    return NextResponse.json({ error: "Too many scans — please wait a moment and try again." }, { status: 429, headers: { "Retry-After": "60" } });
+  }
   const params = new URL(request.url).searchParams;
   const requestedIT = Number(params.get("sizeIT") ?? 42);
   const sizeIT = Number.isFinite(requestedIT) ? requestedIT : 42;
@@ -44,13 +48,14 @@ export async function GET(request: NextRequest) {
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
-  const sourceErrors: Record<string, string> = {};
 
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") listings.push(...result.value);
     else {
       failures.push(adapters[index].name);
-      sourceErrors[adapters[index].name] = result.reason instanceof Error ? (result.reason.stack ?? result.reason.message) : String(result.reason);
+      // Logged server-side only (visible in Vercel's function logs) — never
+      // returned in the response body, since a stack trace can leak file
+      // paths and internals to any caller of this public endpoint.
       console.error(`[scan] ${adapters[index].name} failed:`, result.reason);
     }
   });
@@ -68,7 +73,6 @@ export async function GET(request: NextRequest) {
     listings: listingsWithCAD,
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
-    sourceErrors,
     sourceStatus: {
       eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
       Grailed: failures.includes("Grailed") ? "unavailable" : listings.some((listing) => listing.marketplace === "Grailed") ? "live" : "checked-no-match",

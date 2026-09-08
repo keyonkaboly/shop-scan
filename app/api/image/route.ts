@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp, isRateLimited } from "@/lib/rate-limit";
 
 const allowedHosts = new Set(["i.ebayimg.com", "media-assets.grailed.com", "img.ssensemedia.com"]);
 
 export async function GET(request: NextRequest) {
+  if (isRateLimited(clientIp(request), 120, 60_000)) {
+    return new NextResponse("Too many requests", { status: 429, headers: { "Retry-After": "60" } });
+  }
   const rawUrl = request.nextUrl.searchParams.get("url");
   if (!rawUrl) return new NextResponse("Missing image URL", { status: 400 });
 
