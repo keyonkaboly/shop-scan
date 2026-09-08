@@ -34,6 +34,14 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
+  // The SSENSE adapter launches Chromium via playwright-core + @sparticuz/chromium.
+  // Both are on Next.js's auto-external list, but Turbopack's production
+  // trace was still missing playwright-core's non-JS asset files (e.g.
+  // browsers.json) from the deployed function — forcing both packages'
+  // full contents into the /api/scan trace fixes that.
+  outputFileTracingIncludes: {
+    "/api/scan": ["./node_modules/playwright-core/**/*", "./node_modules/@sparticuz/chromium/**/*"],
+  },
   images: {
     // /api/image?url=... proxies remote thumbnails; the route itself already
     // restricts `url` to an allowlisted set of image hosts, so the query
