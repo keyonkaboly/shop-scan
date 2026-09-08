@@ -48,15 +48,18 @@ export async function GET(request: NextRequest) {
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
+  // Only returned in the response when the caller supplies DEBUG_TOKEN as a
+  // query param — without it, errors are logged server-side only (Vercel's
+  // private function logs), never handed to a public caller.
+  const debugAuthorized = Boolean(process.env.DEBUG_TOKEN) && params.get("debugToken") === process.env.DEBUG_TOKEN;
+  const sourceErrors: Record<string, string> = {};
 
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") listings.push(...result.value);
     else {
       failures.push(adapters[index].name);
-      // Logged server-side only (visible in Vercel's function logs) — never
-      // returned in the response body, since a stack trace can leak file
-      // paths and internals to any caller of this public endpoint.
       console.error(`[scan] ${adapters[index].name} failed:`, result.reason);
+      if (debugAuthorized) sourceErrors[adapters[index].name] = result.reason instanceof Error ? (result.reason.stack ?? result.reason.message) : String(result.reason);
     }
   });
 
@@ -73,6 +76,7 @@ export async function GET(request: NextRequest) {
     listings: listingsWithCAD,
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
+    ...(debugAuthorized ? { sourceErrors } : {}),
     sourceStatus: {
       eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
       Grailed: failures.includes("Grailed") ? "unavailable" : listings.some((listing) => listing.marketplace === "Grailed") ? "live" : "checked-no-match",
