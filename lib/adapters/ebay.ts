@@ -1,5 +1,6 @@
 import type { Condition, Listing, ScanParams, SourceAdapter } from "./types";
 import { ebaySearchUrl } from "../search-links";
+import { isGatTitle, MENS_US_OFFSET, resolveItSize } from "../matching";
 
 let cachedToken: { value: string; expiresAt: number } | null = null;
 
@@ -30,11 +31,12 @@ function mapCondition(conditionId?: string): Listing["condition"] {
   return conditionId && ["1000", "1500", "1750"].includes(conditionId) ? "new" : conditionId ? "used" : "unknown";
 }
 
-function parseSize(value: string): number {
-  return Number(value.replace(/\s+1\/2$/, ".5"));
-}
+interface EbayItem { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string }; qualifiedPrograms?: string[]; categories?: { categoryId?: string }[] }
 
-interface EbayItem { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string }; qualifiedPrograms?: string[] }
+// eBay files every listing under Men's Shoes or Women's Shoes, which is what
+// says whether a bare "Size 8" in the title is a men's or women's size.
+const MENS_SHOES = "93427";
+const WOMENS_SHOES = "3034";
 
 // eBay only reports Authenticity Guarantee eligibility (qualifiedPrograms)
 // for a known delivery destination — without one the field is always empty.
@@ -77,16 +79,13 @@ export const ebayAdapter: SourceAdapter = {
 
     return items.flatMap((item) => {
       const title = item.title ?? "";
-      const lowerTitle = title.toLowerCase();
-      if (!lowerTitle.includes("margiela") || (!lowerTitle.includes("gat") && !lowerTitle.includes("german army"))) return [];
-      const euMatch = lowerTitle.match(/\b(?:eu|it|size)\s*(3[8-9](?:\.5|\s+1\/2)?|4[0-5](?:\.5|\s+1\/2)?)\b/);
-      const usMatch = lowerTitle.match(/\bus\s*(5(?:\.5|\s+1\/2)?|6(?:\.5|\s+1\/2)?|7(?:\.5|\s+1\/2)?|8(?:\.5|\s+1\/2)?|9(?:\.5|\s+1\/2)?|10(?:\.5|\s+1\/2)?|11(?:\.5|\s+1\/2)?|12)\b/);
-      const sizeIT = euMatch ? parseSize(euMatch[1]) : null;
-      const sizeUS = usMatch ? parseSize(usMatch[1]) : null;
-      const hasRequestedSize = sizeIT !== null && sizeUS !== null
-        ? sizeIT === params.sizeIT && sizeUS === params.sizeUS
-        : (sizeIT !== null && sizeIT === params.sizeIT) || (sizeUS !== null && sizeUS === params.sizeUS);
-      if (!hasRequestedSize) return [];
+      const categoryIds = (item.categories ?? []).map((category) => category.categoryId);
+      const womens = categoryIds.includes(WOMENS_SHOES);
+      if (!womens && !categoryIds.includes(MENS_SHOES)) return [];
+      if (!title.toLowerCase().includes("margiela") || !isGatTitle(title)) return [];
+      const sizeIT = resolveItSize(title, { womens });
+      if (sizeIT !== params.sizeIT) return [];
+      const sizeUS = sizeIT - MENS_US_OFFSET;
       const price = item.price?.value ? Number(item.price.value) : NaN;
       if (!Number.isFinite(price)) return [];
       const authenticityGuaranteed = Array.isArray(item.qualifiedPrograms) && item.qualifiedPrograms.some((program) => program === "AUTHENTICITY_GUARANTEE" || program === "AUTHENTICITY_VERIFICATION");

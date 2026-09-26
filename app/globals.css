@@ -52,6 +52,7 @@ button { background: none; border: 0; padding: 0; cursor: pointer; }
 .filter-check input { appearance: none; flex: none; width: 12px; height: 12px; margin: 0; border: 1px solid var(--ink); border-radius: 0; background: var(--paper); cursor: pointer; }
 .filter-check input:checked { background: var(--ink); }
 .manual-list li { margin-bottom: 6px; }
+.filter-pending { color: var(--muted); }
 .manual-list span { display: block; color: var(--muted); }
 .price-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .price-inputs input { width: 100%; min-width: 0; border: 0; border-radius: 0; background: var(--field); padding: 8px 10px; font-size: 11px; }

@@ -2,7 +2,7 @@ import type { Browser, BrowserContext, Page } from "playwright-core";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
 import { isLowTopReplica, parseEuSize } from "../matching";
-import { cached, RETAIL_CACHE_MS } from "../cache";
+import { cached } from "../cache";
 
 // On Vercel there's no local browser, so the function launches the
 // Lambda-sized Chromium build from @sparticuz/chromium (pinned to the same
@@ -39,11 +39,17 @@ function trace(step: string) {
 async function waitPastInterstitial(page: Page): Promise<void> {
   if (!/just a moment/i.test(await page.title())) return;
   trace(`Cloudflare check on ${page.url()}, waiting`);
-  await page.waitForFunction(() => !/just a moment/i.test(document.title), null, { timeout: 15000 });
+  await page.waitForFunction(() => !/just a moment/i.test(document.title), null, { timeout: 5000 });
   await page.waitForLoadState("domcontentloaded");
 }
 
 const USER_AGENT = "Mozilla/5.0 (compatible; MargielaFinder/1.0)";
+
+// Longer than the other stores' cache: each product page lists stock for
+// every size, and SSENSE's Cloudflare starts challenging after about ten
+// rapid page loads, so re-reading pages on every size change is what made
+// scans slow and patchy. Stock here can be up to 20 minutes old.
+const SSENSE_CACHE_MS = 20 * 60 * 1000;
 
 // SSENSE embeds a schema.org Product JSON-LD block per result card (meant for
 // search-engine rich snippets) — reading that directly is far more reliable
@@ -124,9 +130,20 @@ async function loadSizes(context: BrowserContext, url: string): Promise<SsenseSi
 // A product page lists stock for every size, so it's cached per product —
 // switching the size picker re-checks from memory instead of reloading
 // every page.
-async function checkSizeInStock(getContext: () => Promise<BrowserContext>, url: string, sizeIT: number): Promise<boolean | null> {
+async function checkSizeInStock(session: ScanSession, url: string, sizeIT: number): Promise<boolean | null> {
   try {
-    const sizes = await cached(`ssense:sizes:${url}`, RETAIL_CACHE_MS, async () => loadSizes(await getContext(), url));
+    const sizes = await cached(`ssense:sizes:${url}`, SSENSE_CACHE_MS, async () => {
+      // Once Cloudflare has challenged this scan, more page loads only get
+      // challenged too, so the rest are skipped (and not cached) — the next
+      // scan picks them up.
+      if (session.challenged) throw new Error("skipped: Cloudflare already challenged this scan");
+      try {
+        return await loadSizes(await session.get(), url);
+      } catch (error) {
+        if (/waitForFunction|just a moment/i.test(String(error))) session.challenged = true;
+        throw error;
+      }
+    });
     const match = sizes.find((size) => parseEuSize(size.name) === sizeIT);
     return match ? match.stock > 0 : null;
   } catch {
@@ -143,11 +160,11 @@ async function checkSizeInStock(getContext: () => Promise<BrowserContext>, url: 
 // Fewer at once on Vercel, where the function has one vCPU and 2 GB.
 const CHECK_BATCH_SIZE = process.env.VERCEL ? 3 : 6;
 
-async function checkAllSizes<T extends { url: string }>(getContext: () => Promise<BrowserContext>, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
+async function checkAllSizes<T extends { url: string }>(session: ScanSession, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
   const results: (T & { inStock: boolean | null })[] = [];
   for (let i = 0; i < candidates.length; i += CHECK_BATCH_SIZE) {
     const batch = candidates.slice(i, i + CHECK_BATCH_SIZE);
-    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(getContext, candidate.url, sizeIT) })));
+    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(session, candidate.url, sizeIT) })));
     results.push(...batchResults);
   }
   return results;
@@ -208,6 +225,8 @@ async function loadCandidates(context: BrowserContext): Promise<SsenseCandidate[
 // since only the page data is read. It's launched only if something
 // actually needs loading: when the search grid and every candidate's sizes
 // are cached, a scan never starts Chromium at all.
+type ScanSession = ReturnType<typeof lazyContext>;
+
 function lazyContext() {
   let launching: Promise<{ browser: Browser; context: BrowserContext }> | null = null;
   const open = async () => {
@@ -225,6 +244,7 @@ function lazyContext() {
     return { browser, context };
   };
   return {
+    challenged: false,
     get: async () => (await (launching ??= open())).context,
     close: async () => { if (launching) await launching.then(({ browser }) => browser.close(), () => undefined); },
   };
@@ -239,9 +259,9 @@ export const ssenseAdapter: SourceAdapter = {
     traceStartedAt = Date.now();
     const session = lazyContext();
     try {
-      const candidates = await cached("ssense:search", RETAIL_CACHE_MS, async () => loadCandidates(await session.get()));
+      const candidates = await cached("ssense:search", SSENSE_CACHE_MS, async () => loadCandidates(await session.get()));
       trace(`${candidates.length} low-top Replica candidates`);
-      const checked = await checkAllSizes(session.get, candidates, params.sizeIT);
+      const checked = await checkAllSizes(session, candidates, params.sizeIT);
       trace(`done: ${checked.filter((candidate) => candidate.inStock === true).length} in stock in IT ${params.sizeIT}`);
       return checked.flatMap((candidate) => {
         if (candidate.inStock !== true) return [];

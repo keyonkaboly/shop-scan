@@ -1,5 +1,6 @@
 import type { Condition, Listing, ScanParams, SourceAdapter } from "./types";
 import { QUERY } from "../search-links";
+import { isGatTitle, MENS_US_OFFSET, resolveItSize } from "../matching";
 
 // Grailed's own site ships this public, search-only Algolia key to every
 // visitor's browser (Application ID + read-only search key) to run search
@@ -32,6 +33,8 @@ interface GrailedHit {
   condition: string;
   sold: boolean;
   designer_names?: string;
+  department?: string;
+  category_path?: string;
   cover_photo?: { url?: string };
 }
 
@@ -57,10 +60,13 @@ export const grailedAdapter: SourceAdapter = {
       const title = hit.title ?? "";
       const lowerTitle = title.toLowerCase();
       const isDesignerMatch = (hit.designer_names ?? "").toLowerCase().includes("margiela") || lowerTitle.includes("margiela");
-      const isModelMatch = lowerTitle.includes("gat") || lowerTitle.includes("replica") || lowerTitle.includes("german army");
-      if (!isDesignerMatch || !isModelMatch) return [];
-      const sizeUS = Number(hit.size);
-      if (Number.isFinite(sizeUS) && sizeUS !== params.sizeUS) return [];
+      // Grailed's own category separates low-tops from high-tops, flats and
+      // mules; the title check catches other Replica-line models.
+      if (!isDesignerMatch || !hit.category_path?.endsWith("lowtop_sneakers") || !isGatTitle(title)) return [];
+      // Grailed's size field is a US size — men's on menswear listings,
+      // women's on womenswear ones — so it's converted before comparing.
+      const sizeIT = resolveItSize(title, { usSize: hit.size, womens: hit.department === "womenswear" });
+      if (sizeIT !== params.sizeIT) return [];
       const condition = conditionMap[hit.condition] ?? "unknown";
       if (params.condition !== "either" && condition !== params.condition) return [];
       return [{
@@ -69,8 +75,8 @@ export const grailedAdapter: SourceAdapter = {
         price: hit.price,
         currency: "USD",
         condition,
-        sizeIT: params.sizeIT,
-        sizeUS: Number.isFinite(sizeUS) ? sizeUS : params.sizeUS,
+        sizeIT,
+        sizeUS: sizeIT - MENS_US_OFFSET,
         url: `https://www.grailed.com/listings/${hit.id}`,
         imageUrl: hit.cover_photo?.url ?? null,
         scrapedAt: new Date().toISOString(),

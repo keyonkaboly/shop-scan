@@ -17,6 +17,18 @@ const conditions: [Condition, string][] = [["new", "New"], ["used", "Used"], ["e
 const manualSources = [["SSENSE", ssenseSearchUrl()], ["Mytheresa", mytheresaSearchUrl()], ["Cettire", cettireSearchUrl()], ["END.", endClothingSearchUrl()]] as const;
 const liveSourceNames = "eBay, Grailed, SSENSE, Cettire, Mytheresa and END.";
 const PAGE_SIZE = 24;
+// SSENSE needs a real browser and can take close to a minute on a cold
+// start, so it's fetched as its own request: every other store shows up in
+// seconds and SSENSE's pairs merge in when they arrive.
+const FAST_SOURCES = ["eBay", "Grailed", "Cettire", "Mytheresa", "END."];
+const SLOW_SOURCES = ["SSENSE"];
+const emptyScan: ScanResponse = { listings: [], unavailableSources: [], scannedAt: "" };
+
+async function fetchScan(query: string, sources: string[], signal: AbortSignal, timeoutMs: number): Promise<ScanResponse> {
+  const response = await fetch(`/api/scan?${query}&sources=${encodeURIComponent(sources.join(","))}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]), cache: "no-store" });
+  if (!response.ok) throw new Error(`Scan request failed: ${response.status}`);
+  return await response.json() as ScanResponse;
+}
 
 // Canadian formatting, SSENSE-style: whole amounts drop the cents, and CAD
 // reads as a plain "$" while other currencies keep their prefix ("US$").
@@ -37,27 +49,32 @@ export default function Home() {
   // On by default: eBay is the one source where fakes turn up, and its
   // Authenticity Guarantee is the only verification it offers.
   const [ebayVerifiedOnly, setEbayVerifiedOnly] = useState(true);
-  const [scan, setScan] = useState<ScanResponse>({ listings: [], unavailableSources: [], scannedAt: "" });
+  const [scan, setScan] = useState<ScanResponse>(emptyScan);
+  const [slowScan, setSlowScan] = useState<ScanResponse>(emptyScan);
   const [isLoading, setIsLoading] = useState(true);
+  const [slowLoading, setSlowLoading] = useState(true);
   const [error, setError] = useState("");
   const sizeIT = sizes[sizeIndex][0];
   const sizeUS = sizes[sizeIndex][1];
   const priceOf = (listing: Listing) => listing.cadPrice ?? listing.price;
-  const verifiedListings = ebayVerifiedOnly ? scan.listings.filter((listing) => listing.marketplace !== "eBay" || listing.authenticityGuaranteed) : scan.listings;
-  const hiddenUnverified = scan.listings.length - verifiedListings.length;
+  // Cheapest first, listings without a CAD price last — the same order the
+  // API returns, re-applied because SSENSE's results arrive separately.
+  const allListings = [...scan.listings, ...slowScan.listings].sort((first, second) => (first.cadPrice ?? Number.POSITIVE_INFINITY) - (second.cadPrice ?? Number.POSITIVE_INFINITY));
+  const verifiedListings = ebayVerifiedOnly ? allListings.filter((listing) => listing.marketplace !== "eBay" || listing.authenticityGuaranteed) : allListings;
+  const hiddenUnverified = allListings.length - verifiedListings.length;
+  const ssensePending = slowLoading && condition !== "used";
   const priceFilteredListings = verifiedListings.filter((listing) => (minPrice == null || priceOf(listing) >= minPrice) && (maxPrice == null || priceOf(listing) <= maxPrice));
   const storeCounts = new Map<string, number>();
   priceFilteredListings.forEach((listing) => storeCounts.set(listing.marketplace, (storeCounts.get(listing.marketplace) ?? 0) + 1));
   const stores = [...storeCounts.keys()].sort((first, second) => first.localeCompare(second));
   const filteredListings = sourceFilter ? priceFilteredListings.filter((listing) => listing.marketplace === sourceFilter) : priceFilteredListings;
-  // The API already returns cheapest-first (listings without a CAD price last).
   const sortedListings = sort === "price-asc" ? filteredListings : [...filteredListings].sort((first, second) => (second.cadPrice ?? Number.NEGATIVE_INFINITY) - (first.cadPrice ?? Number.NEGATIVE_INFINITY));
   const pageCount = Math.max(1, Math.ceil(sortedListings.length / PAGE_SIZE));
   const visibleListings = sortedListings.slice(resultPage * PAGE_SIZE, (resultPage + 1) * PAGE_SIZE);
   const cheapest = filteredListings.reduce<Listing | null>((best, listing) => (best === null || priceOf(listing) < priceOf(best) ? listing : best), null);
   const hiddenByPrice = verifiedListings.length - priceFilteredListings.length;
 
-  const unavailable = new Set(scan.unavailableSources);
+  const unavailable = new Set([...scan.unavailableSources, ...slowScan.unavailableSources]);
   const scanFinished = !isLoading && Boolean(scan.scannedAt);
   const manualLinks: ManualLink[] = [
     ...(scanFinished && !scan.listings.some((listing) => listing.marketplace === "eBay") ? [{ name: "eBay", url: scan.fallbackSearches?.eBay ?? ebaySearchUrl(condition === "new" ? "1000" : condition === "used" ? "3000" : undefined), note: scan.sourceStatus?.eBay === "unavailable" ? "API unavailable" : "API checked · no verified match" }] : []),
@@ -66,30 +83,29 @@ export default function Home() {
 
   useEffect(() => {
     const controller = new AbortController();
-    let timedOut = false;
-    const deadline = window.setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, 45000);
-    const timer = window.setTimeout(async () => {
+    const timer = window.setTimeout(() => {
+      const query = `sizeIT=${sizeIT}&condition=${condition}`;
       setIsLoading(true);
       setError("");
-      try {
-        const response = await fetch(`/api/scan?sizeIT=${sizeIT}&condition=${condition}`, { signal: controller.signal, cache: "no-store" });
-        if (!response.ok) throw new Error("Scan request failed");
-        setScan(await response.json() as ScanResponse);
-      } catch (requestError) {
-        if (requestError instanceof DOMException && requestError.name === "AbortError") {
-          if (timedOut) setError("This scan timed out. Manual search links are listed on the right.");
-          return;
-        }
-        setError("The scan could not complete. Manual search links are listed on the right.");
-      } finally {
-        if (!controller.signal.aborted) setIsLoading(false);
-        if (timedOut) setIsLoading(false);
+      // Cleared up front so the previous size's SSENSE pairs never mix into
+      // this size's results while its own SSENSE request is still running.
+      setSlowScan(emptyScan);
+      fetchScan(query, FAST_SOURCES, controller.signal, 25000)
+        .then(setScan)
+        .catch(() => { if (!controller.signal.aborted) setError("The scan could not complete. Manual search links are listed on the right."); })
+        .finally(() => { if (!controller.signal.aborted) setIsLoading(false); });
+      // SSENSE only sells new pairs, so a Used scan skips it entirely.
+      if (condition === "used") {
+        setSlowLoading(false);
+        return;
       }
+      setSlowLoading(true);
+      fetchScan(query, SLOW_SOURCES, controller.signal, 60000)
+        .then(setSlowScan)
+        .catch(() => { if (!controller.signal.aborted) setSlowScan({ ...emptyScan, unavailableSources: SLOW_SOURCES }); })
+        .finally(() => { if (!controller.signal.aborted) setSlowLoading(false); });
     }, 400);
-    return () => { window.clearTimeout(timer); window.clearTimeout(deadline); controller.abort(); };
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [condition, sizeIT]);
 
   const selectCondition = (next: Condition) => { setResultPage(0); setCondition(next); };
@@ -176,13 +192,13 @@ export default function Home() {
           <div className="results">
             <div className="results-head">
               <p className="results-title">Showing results for ‘Replica GAT’ — IT {sizeIT} / US {sizeUS} · {condition}</p>
-              <p className="results-meta" aria-live="polite">{isLoading ? "Scanning…" : `${sortedListings.length} ${sortedListings.length === 1 ? "listing" : "listings"}${cheapest ? ` · from ${formatMoney(priceOf(cheapest), cheapest.cadPrice == null ? cheapest.currency : "CAD")}` : ""}${scan.scannedAt ? ` · checked ${new Date(scan.scannedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`}</p>
+              <p className="results-meta" aria-live="polite">{isLoading ? "Scanning…" : `${sortedListings.length} ${sortedListings.length === 1 ? "listing" : "listings"}${cheapest ? ` · from ${formatMoney(priceOf(cheapest), cheapest.cadPrice == null ? cheapest.currency : "CAD")}` : ""}${scan.scannedAt ? ` · checked ${new Date(scan.scannedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}${ssensePending ? " · SSENSE still checking…" : ""}`}</p>
             </div>
             {error && <p className="scan-error" role="alert">{error}</p>}
             {isLoading
               ? <p className="scan-status">Checking {liveSourceNames} for IT {sizeIT} / US {sizeUS}…</p>
               : sortedListings.length === 0
-                ? <p className="scan-status">No verified live listings for this selection.</p>
+                ? <p className="scan-status">{ssensePending ? "Checking SSENSE…" : "No verified live listings for this selection."}</p>
                 : <ul className="product-grid">{visibleListings.map(renderCard)}</ul>}
             {!isLoading && pageCount > 1 && <nav className="pagination" aria-label="Result pages">
               <button type="button" onClick={() => goToPage(Math.max(0, resultPage - 1))} disabled={resultPage === 0}>Previous</button>
@@ -204,6 +220,7 @@ export default function Home() {
               <ul className="filter-list">
                 <li><button type="button" className={sourceFilter === null ? "is-selected" : ""} aria-pressed={sourceFilter === null} onClick={() => selectStore(null)}>All stores{!isLoading && ` (${priceFilteredListings.length})`}</button></li>
                 {!isLoading && stores.map((name) => <li key={name}><button type="button" className={sourceFilter === name ? "is-selected" : ""} aria-pressed={sourceFilter === name} onClick={() => selectStore(name)}>{name} ({storeCounts.get(name)})</button></li>)}
+                {!isLoading && ssensePending && <li className="filter-pending">SSENSE (checking…)</li>}
               </ul>
             </div>
             {manualLinks.length > 0 && <div className="filter-group">
