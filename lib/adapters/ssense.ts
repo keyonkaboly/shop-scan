@@ -55,15 +55,13 @@ const SSENSE_CACHE_MS = 20 * 60 * 1000;
 // search-engine rich snippets) — reading that directly is far more reliable
 // than parsing the rendered layout, which is Tailwind-class-driven and
 // changes often. SSENSE is authorized new-only retail, so condition is
-// always "new". Per-size stock isn't in the search grid, so every
-// candidate's own product page is opened (full navigation — SSENSE's
-// Cloudflare rules block a plain in-page fetch() even with a warmed-up
-// session, so a real page load per product is the only reliable way in) to
-// read its embedded `sizes` array and confirm the requested IT size is
-// actually in stock. Anything that can't be confirmed in-stock in that exact
-// size is dropped rather than shown as a guess. No cap on how many
-// candidates get checked — every match is verified. Searches the Canadian
-// storefront, so prices are SSENSE's own CAD prices.
+// always "new". In-stock-in-your-size comes from SSENSE's own size filter
+// (one listing page per size); if that page can't be used, each Replica's
+// product page is opened to read its embedded `sizes` array instead (full
+// navigation — SSENSE's Cloudflare rules block a plain in-page fetch()).
+// Anything that can't be confirmed in stock in that exact size is dropped
+// rather than shown as a guess. Uses the Canadian storefront, so prices are
+// SSENSE's own CAD prices.
 
 interface SsenseProduct {
   name: string;
@@ -178,38 +176,56 @@ interface SsenseCandidate {
   imageUrl: string | null;
 }
 
-async function loadCandidates(context: BrowserContext): Promise<SsenseCandidate[]> {
+// SSENSE's own size filter: its Maison Margiela low-top sneaker listing
+// filtered to one size lists only pairs in stock in that size, so a single
+// page load answers the whole question — instead of one product page per
+// candidate, which Cloudflare starts challenging after a handful. (SSENSE
+// only applies the size filter with a designer/category in the path; on the
+// plain search page it's silently ignored.)
+function sizeFilteredUrl(sizeIT: number): string {
+  return `https://www.ssense.com/en-ca/men/designers/maison-margiela/low-top-sneakers?sizes=${sizeIT}`;
+}
+
+// Reads the product cards' JSON-LD from an SSENSE listing page. With
+// `requiredSize`, the page's own filter state must show that size applied —
+// otherwise its products aren't size-verified and it throws.
+async function loadCandidates(context: BrowserContext, url: string, label: string, requiredSize?: number): Promise<SsenseCandidate[]> {
   const page = await context.newPage();
   try {
     // The product JSON-LD is server-rendered, so it's there as soon as the
     // HTML is — waiting for "networkidle" meant waiting on ~30 ad/analytics
     // requests, which alone could eat most of the time budget on Vercel.
-    const response = await page.goto(ssenseSearchUrl(), { waitUntil: "domcontentloaded", timeout: 20000 });
-    trace(`search page: HTTP ${response?.status()} "${await page.title()}"`);
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    trace(`${label}: HTTP ${response?.status()} "${await page.title()}"`);
     await waitPastInterstitial(page);
+    if (requiredSize !== undefined) {
+      const html = (await page.content()).replace(/\\"/g, '"');
+      const applied = html.match(/"searchFilters":\{[\s\S]*?"sizes":\[([^\]]*)\]/)?.[1] ?? "";
+      if (!applied.includes(`"${requiredSize}"`)) throw new Error(`${label}: size filter not applied (sizes: [${applied.slice(0, 80)}])`);
+    }
     const products = await page.evaluate(() => {
       const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
       return scripts
         .map((script) => { try { return JSON.parse(script.textContent ?? ""); } catch { return null; } })
         .filter((product) => product && product["@type"] === "Product");
-    }) as SsenseProduct[];
-    // This search always has results, so an empty grid means the page was
-    // blocked or its layout changed — fail loudly rather than cache "none".
-    if (!products.length) throw new Error("SSENSE search page returned no products");
-    trace(`search page: ${products.length} products`);
+    }) as (SsenseProduct & { productID?: string })[];
+    // An empty grid can't be told apart from a blocked or changed page, so
+    // it's an error rather than a cached "nothing in stock".
+    if (!products.length) throw new Error(`${label}: no products on the page`);
+    trace(`${label}: ${products.length} products (${products.map((product) => product.productID).join(" ")})`);
     return products.flatMap((product) => {
       const brand = (product.brand?.name ?? "").toLowerCase();
       const name = product.name ?? "";
       if (!brand.includes("margiela") || !isLowTopReplica(name)) return [];
       const price = product.offers?.price;
-      const url = product.offers?.url ?? product.url;
-      if (!Number.isFinite(price) || !url) return [];
+      const productUrl = product.offers?.url ?? product.url;
+      if (!Number.isFinite(price) || !productUrl) return [];
       const filename = product.image?.split("/").pop();
       return [{
         title: `Maison Margiela ${name}`,
         price: price as number,
         currency: product.offers?.priceCurrency ?? "CAD",
-        url,
+        url: productUrl,
         imageUrl: filename ? `https://img.ssensemedia.com/image/upload/f_auto,c_limit,w_600,q_85/${filename}` : null,
       }];
     }).sort((first, second) => first.price - second.price);
@@ -259,26 +275,36 @@ export const ssenseAdapter: SourceAdapter = {
     traceStartedAt = Date.now();
     const session = lazyContext();
     try {
-      const candidates = await cached("ssense:search", SSENSE_CACHE_MS, async () => loadCandidates(await session.get()));
-      trace(`${candidates.length} low-top Replica candidates`);
-      const checked = await checkAllSizes(session, candidates, params.sizeIT);
-      trace(`done: ${checked.filter((candidate) => candidate.inStock === true).length} in stock in IT ${params.sizeIT}`);
-      return checked.flatMap((candidate) => {
-        if (candidate.inStock !== true) return [];
-        return [{
-          marketplace: "SSENSE",
-          title: candidate.title,
-          price: candidate.price,
-          currency: candidate.currency,
-          condition: "new" as const,
-          sizeIT: params.sizeIT,
-          sizeUS: params.sizeUS,
-          url: candidate.url,
-          imageUrl: candidate.imageUrl,
-          scrapedAt: new Date().toISOString(),
-          sourceType: "scrape" as const,
-        }];
-      });
+      let inStock: SsenseCandidate[];
+      try {
+        inStock = await cached(`ssense:size:${params.sizeIT}`, SSENSE_CACHE_MS, async () => loadCandidates(await session.get(), sizeFilteredUrl(params.sizeIT), "size-filtered page", params.sizeIT));
+        trace(`done via size filter: ${inStock.length} low-top Replicas in stock in IT ${params.sizeIT}`);
+      } catch (error) {
+        // Fallback: every Replica from the search page, each confirmed on
+        // its own product page.
+        trace(`size filter unusable (${error instanceof Error ? error.message.split("\n")[0] : error}), checking product pages`);
+        const candidates = await cached("ssense:search", SSENSE_CACHE_MS, async () => loadCandidates(await session.get(), ssenseSearchUrl(), "search page"));
+        trace(`${candidates.length} low-top Replica candidates`);
+        const checked = await checkAllSizes(session, candidates, params.sizeIT);
+        inStock = checked.filter((candidate) => candidate.inStock === true);
+        // Nothing confirmed because Cloudflare cut the scan short isn't "no
+        // stock" — report SSENSE unavailable so the page offers its link.
+        if (!inStock.length && session.challenged) throw new Error("SSENSE's Cloudflare check blocked the scan before any size could be confirmed");
+        trace(`done via product pages: ${inStock.length} in stock in IT ${params.sizeIT}`);
+      }
+      return inStock.map((candidate) => ({
+        marketplace: "SSENSE",
+        title: candidate.title,
+        price: candidate.price,
+        currency: candidate.currency,
+        condition: "new" as const,
+        sizeIT: params.sizeIT,
+        sizeUS: params.sizeUS,
+        url: candidate.url,
+        imageUrl: candidate.imageUrl,
+        scrapedAt: new Date().toISOString(),
+        sourceType: "scrape" as const,
+      }));
     } finally {
       await session.close();
     }
