@@ -8,7 +8,7 @@ import { getBaseUrl } from "@/lib/site";
 const sans = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const serif = Newsreader({ subsets: ["latin"], variable: "--font-serif", style: ["normal", "italic"] });
 
-const title = "Gat Scan — Find your dream pair.";
+const title = "Gat Scan — Find the pair for you.";
 const description = "Real-time market scan for Maison Margiela Replica GAT sneakers across eBay, Grailed, SSENSE, Cettire, Mytheresa and END.";
 
 export const metadata: Metadata = {
