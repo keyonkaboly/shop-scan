@@ -1,24 +1,36 @@
-import type { Browser } from "playwright-core";
+import type { Browser, Page } from "playwright-core";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
 import { isLowTopReplica, parseEuSize } from "../matching";
 import { cached, RETAIL_CACHE_MS } from "../cache";
 
-// Running headless Chromium inside a Vercel serverless function needs more
-// memory than the Hobby plan allows configuring (Pro/Enterprise-only), so
-// the browser runs on Browserless's infrastructure instead — Playwright just
-// connects to it over a WebSocket, no local binary involved. Falls back to a
-// real local browser (via the full `playwright` package, a devDependency)
-// when no BROWSERLESS_API_KEY is configured, so local dev works without
-// signing up for anything.
+// On Vercel there's no local browser, so the function launches the
+// Lambda-sized Chromium build from @sparticuz/chromium (pinned to the same
+// Chromium version playwright-core 1.63 drives). BROWSERLESS_API_KEY, if
+// set, uses a remote Browserless browser instead. Local dev launches the
+// full `playwright` package's browser (a devDependency).
 async function launchBrowser(): Promise<Browser> {
   const apiKey = process.env.BROWSERLESS_API_KEY;
   if (apiKey) {
     const { chromium } = await import("playwright-core");
     return chromium.connect(`wss://production-sfo.browserless.io/chromium/playwright?token=${apiKey}`);
   }
+  if (process.env.VERCEL) {
+    const [{ chromium }, { default: serverlessChromium }] = await Promise.all([import("playwright-core"), import("@sparticuz/chromium")]);
+    return chromium.launch({ executablePath: await serverlessChromium.executablePath(), args: serverlessChromium.args, headless: true });
+  }
   const { chromium: localChromium } = await import("playwright");
   return localChromium.launch({ headless: true });
+}
+
+// Cloudflare sometimes answers with its automatic "Just a moment..." check,
+// which a normal browser clears by itself within a few seconds before
+// redirecting to the real page. Wait for that instead of reading the
+// interstitial; if it never clears, the caller treats the page as unreadable.
+async function waitPastInterstitial(page: Page): Promise<void> {
+  if (!/just a moment/i.test(await page.title())) return;
+  await page.waitForFunction(() => !/just a moment/i.test(document.title), null, { timeout: 15000 });
+  await page.waitForLoadState("domcontentloaded");
 }
 
 const USER_AGENT = "Mozilla/5.0 (compatible; MargielaFinder/1.0)";
@@ -85,6 +97,7 @@ async function loadSizes(browser: Browser, url: string): Promise<SsenseSizeEntry
   const page = await browser.newPage({ userAgent: USER_AGENT });
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
+    await waitPastInterstitial(page);
     const sizes = extractSizes(await page.content());
     if (!sizes.length) throw new Error(`No size table found on ${url}`);
     return sizes;
@@ -112,7 +125,8 @@ async function checkSizeInStock(getBrowser: () => Promise<Browser>, url: string,
 // occasionally pushes total time past the adapter's timeout budget, silently
 // dropping the whole batch. Processing in small batches keeps peak
 // concurrency (and thus timing) predictable.
-const CHECK_BATCH_SIZE = 6;
+// Fewer at once on Vercel, where the function has one vCPU and 2 GB.
+const CHECK_BATCH_SIZE = process.env.VERCEL ? 3 : 6;
 
 async function checkAllSizes<T extends { url: string }>(getBrowser: () => Promise<Browser>, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
   const results: (T & { inStock: boolean | null })[] = [];
@@ -136,6 +150,7 @@ async function loadCandidates(browser: Browser): Promise<SsenseCandidate[]> {
   const page = await browser.newPage({ userAgent: USER_AGENT });
   try {
     await page.goto(ssenseSearchUrl(), { waitUntil: "networkidle", timeout: 20000 });
+    await waitPastInterstitial(page);
     const products = await page.evaluate(() => {
       const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
       return scripts
