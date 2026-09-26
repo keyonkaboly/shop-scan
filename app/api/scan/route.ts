@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl } from "@/lib/search-links";
+import { ebaySearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
@@ -7,7 +7,6 @@ import { ssenseAdapter } from "@/lib/adapters/ssense";
 import { cettireAdapter } from "@/lib/adapters/cettire";
 import { mytheresaAdapter } from "@/lib/adapters/mytheresa";
 import { endAdapter } from "@/lib/adapters/end";
-import { makeRetailStubAdapter } from "@/lib/adapters/retail-affiliate-stub";
 import { getRateToCAD } from "@/lib/currency";
 import { clientIp, isRateLimited } from "@/lib/rate-limit";
 import type { Condition, Listing, SourceAdapter } from "@/lib/adapters/types";
@@ -15,10 +14,6 @@ import type { Condition, Listing, SourceAdapter } from "@/lib/adapters/types";
 export const runtime = "nodejs";
 
 const liveAdapters = [ebayAdapter, grailedAdapter, ssenseAdapter, cettireAdapter, mytheresaAdapter, endAdapter];
-const retailStubs = [
-  makeRetailStubAdapter("Farfetch", farfetchSearchUrl()),
-  makeRetailStubAdapter("MR PORTER", mrPorterSearchUrl()),
-];
 // SSENSE drives a real browser per product; Cettire makes one live stock
 // call per candidate; the rest are single API calls.
 const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 40000, Cettire: 15000, Mytheresa: 10000, "END.": 8000 };
@@ -47,7 +42,7 @@ export async function GET(request: NextRequest) {
   const requestedCondition = params.get("condition") ?? "either";
   const condition = conditionValues.includes(requestedCondition as Condition) ? requestedCondition as Condition : "either";
   const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
-  const adapters = [...liveAdapters, ...retailStubs];
+  const adapters = liveAdapters;
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
@@ -78,11 +73,10 @@ export async function GET(request: NextRequest) {
     params: { sizeIT, sizeUS, condition },
     listings: listingsWithCAD,
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
-    unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
+    unavailableSources: failures,
     ...(debugAuthorized ? { sourceErrors } : {}),
     sourceStatus: {
       ...Object.fromEntries(liveAdapters.map(({ name }) => [name, failures.includes(name) ? "unavailable" : listings.some((listing) => listing.marketplace === name) ? "live" : "checked-no-match"])),
-      retail: "search-link-only",
     },
     fallbackSearches: {
       eBay: ebaySearchUrl(condition === "new" ? "1000" : condition === "used" ? "3000" : undefined),

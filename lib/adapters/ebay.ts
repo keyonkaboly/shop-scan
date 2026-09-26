@@ -36,6 +36,14 @@ function parseSize(value: string): number {
 
 interface EbayItem { title?: string; price?: { value?: string; currency?: string }; conditionId?: string; itemWebUrl?: string; image?: { imageUrl?: string }; qualifiedPrograms?: string[] }
 
+// eBay only reports Authenticity Guarantee eligibility (qualifiedPrograms)
+// for a known delivery destination — without one the field is always empty.
+// Gat Scan prices for a Canadian buyer, so results are requested for
+// delivery to Canada, which also drops listings that won't ship there.
+// Eligibility is decided by country: any valid Canadian postal code gives
+// the same results.
+const DELIVERY_FILTER = "deliveryCountry:CA,deliveryPostalCode:M5V2T6";
+
 const PAGE_SIZE = 200;
 const MAX_ITEMS = 1000; // safety cap — this niche runs ~400-500 total, this leaves headroom without risking a runaway number of calls
 
@@ -56,7 +64,7 @@ export const ebayAdapter: SourceAdapter = {
     const codes = conditionCodes(params.condition);
     const buildQuery = (offset: number) => {
       const query = new URLSearchParams({ q: "maison margiela replica gat", limit: String(PAGE_SIZE), offset: String(offset), fieldgroups: "EXTENDED" });
-      if (codes.length) query.set("filter", `conditionIds:{${codes.join("|")}}`);
+      query.set("filter", codes.length ? `conditionIds:{${codes.join("|")}},${DELIVERY_FILTER}` : DELIVERY_FILTER);
       return query;
     };
 

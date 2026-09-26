@@ -47,6 +47,10 @@ button { background: none; border: 0; padding: 0; cursor: pointer; }
 .filter-list button, .filter-list a { padding: 0; text-align: left; }
 .filter-list button:hover, .filter-list a:hover, .filter-list .is-selected { text-decoration: underline; text-underline-offset: 2px; }
 .size-list button span { margin-left: 8px; color: var(--muted); }
+/* SSENSE's square "SALE" checkbox: empty outline, solid black when on. */
+.filter-check { display: flex; align-items: center; gap: 10px; text-transform: uppercase; cursor: pointer; }
+.filter-check input { appearance: none; flex: none; width: 12px; height: 12px; margin: 0; border: 1px solid var(--ink); border-radius: 0; background: var(--paper); cursor: pointer; }
+.filter-check input:checked { background: var(--ink); }
 .manual-list li { margin-bottom: 6px; }
 .manual-list span { display: block; color: var(--muted); }
 .price-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }

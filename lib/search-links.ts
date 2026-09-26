@@ -9,10 +9,6 @@ export function grailedSearchUrl(): string {
   return `https://www.grailed.com/shop?query=${encodeURIComponent(QUERY)}`;
 }
 
-export function farfetchSearchUrl(): string {
-  return "https://lasso.to/pr5Vskbg0H/";
-}
-
 export function ssenseSearchUrl(): string {
   return `https://www.ssense.com/en-ca/men?q=${encodeURIComponent(QUERY)}`;
 }
@@ -23,10 +19,6 @@ export function mytheresaSearchUrl(): string {
 
 export function cettireSearchUrl(): string {
   return `https://www.cettire.com/ca/pages/search?q=${encodeURIComponent(QUERY)}`;
-}
-
-export function mrPorterSearchUrl(): string {
-  return `https://www.mrporter.com/en-us/search/?keywords=${encodeURIComponent(QUERY)}`;
 }
 
 export function endClothingSearchUrl(): string {

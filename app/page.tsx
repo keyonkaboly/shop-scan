@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
+import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
 import IntroScene from "@/components/IntroScene";
 import Link from "next/link";
 import Image from "next/image";
@@ -9,12 +9,12 @@ import Image from "next/image";
 const sizes = [[38, 5], [38.5, 5.5], [39, 6], [39.5, 6.5], [40, 7], [40.5, 7.5], [41, 8], [41.5, 8.5], [42, 9], [42.5, 9.5], [43, 10], [43.5, 10.5], [44, 11], [44.5, 11.5], [45, 12]] as const;
 type Condition = "new" | "used" | "either";
 type Sort = "price-asc" | "price-desc";
-type Listing = { marketplace: string; title: string; price: number; currency: string; cadPrice?: number | null; condition: "new" | "used" | "unknown"; sizeUS: number | null; sizeIT: number | null; url: string; imageUrl: string | null; sourceType: "api" | "scrape" | "affiliate-feed" | "search-link-only"; authenticityGuaranteed?: boolean };
+type Listing = { marketplace: string; title: string; price: number; currency: string; cadPrice?: number | null; condition: "new" | "used" | "unknown"; sizeUS: number | null; sizeIT: number | null; url: string; imageUrl: string | null; sourceType: "api" | "scrape" | "affiliate-feed"; authenticityGuaranteed?: boolean };
 type ScanResponse = { listings: Listing[]; unavailableSources: string[]; scannedAt: string; sourceStatus?: Record<string, string>; fallbackSearches?: { eBay?: string } };
 type ManualLink = { name: string; url: string; note: string };
 const conditions: [Condition, string][] = [["new", "New"], ["used", "Used"], ["either", "Either"]];
-const manualSources = [["Farfetch", farfetchSearchUrl()], ["SSENSE", ssenseSearchUrl()], ["Mytheresa", mytheresaSearchUrl()], ["Cettire", cettireSearchUrl()], ["MR PORTER", mrPorterSearchUrl()], ["END.", endClothingSearchUrl()]] as const;
-const directLinkSources = new Set(["Farfetch"]);
+// Fallback links, shown only when that store's live scan fails.
+const manualSources = [["SSENSE", ssenseSearchUrl()], ["Mytheresa", mytheresaSearchUrl()], ["Cettire", cettireSearchUrl()], ["END.", endClothingSearchUrl()]] as const;
 const liveSourceNames = "eBay, Grailed, SSENSE, Cettire, Mytheresa and END.";
 const PAGE_SIZE = 24;
 
@@ -34,13 +34,18 @@ export default function Home() {
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<Sort>("price-asc");
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // On by default: eBay is the one source where fakes turn up, and its
+  // Authenticity Guarantee is the only verification it offers.
+  const [ebayVerifiedOnly, setEbayVerifiedOnly] = useState(true);
   const [scan, setScan] = useState<ScanResponse>({ listings: [], unavailableSources: [], scannedAt: "" });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const sizeIT = sizes[sizeIndex][0];
   const sizeUS = sizes[sizeIndex][1];
   const priceOf = (listing: Listing) => listing.cadPrice ?? listing.price;
-  const priceFilteredListings = scan.listings.filter((listing) => (minPrice == null || priceOf(listing) >= minPrice) && (maxPrice == null || priceOf(listing) <= maxPrice));
+  const verifiedListings = ebayVerifiedOnly ? scan.listings.filter((listing) => listing.marketplace !== "eBay" || listing.authenticityGuaranteed) : scan.listings;
+  const hiddenUnverified = scan.listings.length - verifiedListings.length;
+  const priceFilteredListings = verifiedListings.filter((listing) => (minPrice == null || priceOf(listing) >= minPrice) && (maxPrice == null || priceOf(listing) <= maxPrice));
   const storeCounts = new Map<string, number>();
   priceFilteredListings.forEach((listing) => storeCounts.set(listing.marketplace, (storeCounts.get(listing.marketplace) ?? 0) + 1));
   const stores = [...storeCounts.keys()].sort((first, second) => first.localeCompare(second));
@@ -50,13 +55,13 @@ export default function Home() {
   const pageCount = Math.max(1, Math.ceil(sortedListings.length / PAGE_SIZE));
   const visibleListings = sortedListings.slice(resultPage * PAGE_SIZE, (resultPage + 1) * PAGE_SIZE);
   const cheapest = filteredListings.reduce<Listing | null>((best, listing) => (best === null || priceOf(listing) < priceOf(best) ? listing : best), null);
-  const hiddenByPrice = scan.listings.length - priceFilteredListings.length;
+  const hiddenByPrice = verifiedListings.length - priceFilteredListings.length;
 
   const unavailable = new Set(scan.unavailableSources);
   const scanFinished = !isLoading && Boolean(scan.scannedAt);
   const manualLinks: ManualLink[] = [
     ...(scanFinished && !scan.listings.some((listing) => listing.marketplace === "eBay") ? [{ name: "eBay", url: scan.fallbackSearches?.eBay ?? ebaySearchUrl(condition === "new" ? "1000" : condition === "used" ? "3000" : undefined), note: scan.sourceStatus?.eBay === "unavailable" ? "API unavailable" : "API checked · no verified match" }] : []),
-    ...(scanFinished ? manualSources.filter(([name]) => unavailable.has(name)).map(([name, url]) => ({ name, url, note: scan.sourceStatus?.[name] === "unavailable" ? "Live scan unavailable" : directLinkSources.has(name) ? "Direct link" : "Not scanned live" })) : []),
+    ...(scanFinished ? manualSources.filter(([name]) => unavailable.has(name)).map(([name, url]) => ({ name, url, note: "Live scan unavailable" })) : []),
   ];
 
   useEffect(() => {
@@ -146,6 +151,10 @@ export default function Home() {
           {/* Mobile only: filters collapse behind one bar, as on SSENSE's mobile site. */}
           <button type="button" className="filter-toggle" aria-expanded={filtersOpen} aria-controls="scan-filters scan-sort" onClick={() => setFiltersOpen((open) => !open)}><span>Filter &amp; sort</span><span aria-hidden="true">{filtersOpen ? "−" : "+"}</span></button>
           <aside className="filter-column" id="scan-filters" aria-label="Filters">
+            <div className="filter-group">
+              <label className="filter-check"><input type="checkbox" checked={ebayVerifiedOnly} onChange={(event) => { setResultPage(0); setEbayVerifiedOnly(event.currentTarget.checked); }} /><span>eBay: Authenticity Guarantee only</span></label>
+              <p className="filter-note">{!ebayVerifiedOnly ? "Showing every eBay listing" : hiddenUnverified > 0 ? `${hiddenUnverified} unverified eBay ${hiddenUnverified === 1 ? "listing" : "listings"} hidden` : "Unverified eBay listings hidden"}</p>
+            </div>
             <div className="filter-group">
               <h2 className="filter-heading">Condition</h2>
               <ul className="filter-list">{conditions.map(([value, label]) => <li key={value}><button type="button" className={condition === value ? "is-selected" : ""} aria-pressed={condition === value} onClick={() => selectCondition(value)}>{label}</button></li>)}</ul>

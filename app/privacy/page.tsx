@@ -18,7 +18,7 @@ export default function PrivacyPolicy() {
     <p>Gat Scan has no accounts and no sign-up. When you use the size and condition selectors, your browser sends that selection to our server so we can run a live search — it is not stored or logged against you. We do not collect names, emails, or payment details on this site.</p>
 
     <h2>Cookies and local storage</h2>
-    <p>We do not set first-party tracking or advertising cookies ourselves. If you click through to a retailer (eBay, Grailed, Farfetch, SSENSE, Mytheresa, Cettire, MR PORTER, END., or others), that retailer may set its own cookie on its own site — that is governed by their privacy policy, not ours.</p>
+    <p>We do not set first-party tracking or advertising cookies ourselves. If you click through to a retailer (eBay, Grailed, SSENSE, Cettire, Mytheresa or END.), that retailer may set its own cookie on its own site — that is governed by their privacy policy, not ours.</p>
 
     <h2>Third-party data sources</h2>
     <p>Listing data is fetched live by our server from eBay&rsquo;s Browse API, Grailed, SSENSE, Cettire, Mytheresa and END. Listing thumbnails are proxied through our own server from those stores&rsquo; image hosts, so your browser never contacts them directly. Currency conversion uses a third-party exchange-rate provider.</p>

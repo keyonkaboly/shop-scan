@@ -17,7 +17,7 @@ export interface Listing {
   url: string;
   imageUrl: string | null;
   scrapedAt: string;
-  sourceType: "api" | "scrape" | "affiliate-feed" | "search-link-only";
+  sourceType: "api" | "scrape" | "affiliate-feed";
   authenticityGuaranteed?: boolean;
 }
 
