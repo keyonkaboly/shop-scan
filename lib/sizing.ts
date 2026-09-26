@@ -11,7 +11,9 @@ export const SIZE_TABLE: SizeRow[] = [
   { eu: 42, usMens: 9 }, { eu: 42.5, usMens: 9.5 },
   { eu: 43, usMens: 10 }, { eu: 43.5, usMens: 10.5 },
   { eu: 44, usMens: 11 }, { eu: 44.5, usMens: 11.5 },
-  { eu: 45, usMens: 12 },
+  { eu: 45, usMens: 12 }, { eu: 45.5, usMens: 12.5 },
+  { eu: 46, usMens: 13 }, { eu: 46.5, usMens: 13.5 },
+  { eu: 47, usMens: 14 },
 ];
 
 export function euToUS(eu: number): SizeRow | null {

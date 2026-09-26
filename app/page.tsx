@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, mytheresaSearchUrl, ssenseSearchUrl } from "@/lib/search-links";
+import { SIZE_TABLE } from "@/lib/sizing";
 import IntroScene from "@/components/IntroScene";
 import Link from "next/link";
 import Image from "next/image";
 
-const sizes = [[38, 5], [38.5, 5.5], [39, 6], [39.5, 6.5], [40, 7], [40.5, 7.5], [41, 8], [41.5, 8.5], [42, 9], [42.5, 9.5], [43, 10], [43.5, 10.5], [44, 11], [44.5, 11.5], [45, 12]] as const;
+const DEFAULT_SIZE_INDEX = SIZE_TABLE.findIndex((row) => row.eu === 42);
 type Condition = "new" | "used" | "either";
 type Sort = "price-asc" | "price-desc";
 type Listing = { marketplace: string; title: string; price: number; currency: string; cadPrice?: number | null; condition: "new" | "used" | "unknown"; sizeUS: number | null; sizeIT: number | null; url: string; imageUrl: string | null; sourceType: "api" | "scrape" | "affiliate-feed"; authenticityGuaranteed?: boolean };
@@ -39,7 +40,7 @@ function formatMoney(amount: number, currency: string): string {
 
 export default function Home() {
   const [condition, setCondition] = useState<Condition>("either");
-  const [sizeIndex, setSizeIndex] = useState(8);
+  const [sizeIndex, setSizeIndex] = useState(DEFAULT_SIZE_INDEX);
   const [resultPage, setResultPage] = useState(0);
   const [minPrice, setMinPrice] = useState<number | null>(null);
   const [maxPrice, setMaxPrice] = useState<number | null>(null);
@@ -54,8 +55,8 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [slowLoading, setSlowLoading] = useState(true);
   const [error, setError] = useState("");
-  const sizeIT = sizes[sizeIndex][0];
-  const sizeUS = sizes[sizeIndex][1];
+  const sizeIT = SIZE_TABLE[sizeIndex].eu;
+  const sizeUS = SIZE_TABLE[sizeIndex].usMens;
   const priceOf = (listing: Listing) => listing.cadPrice ?? listing.price;
   // Cheapest first, listings without a CAD price last — the same order the
   // API returns, re-applied because SSENSE's results arrive separately.
@@ -182,7 +183,7 @@ export default function Home() {
             </div>
             <div className="filter-group">
               <h2 className="filter-heading">Size <span>IT / US</span></h2>
-              <ul className="filter-list size-list">{sizes.map(([italian, american], index) => <li key={italian}><button type="button" className={sizeIndex === index ? "is-selected" : ""} aria-pressed={sizeIndex === index} aria-label={`IT ${italian}, US ${american}`} onClick={() => selectSize(index)}>IT {italian}<span>US {american}</span></button></li>)}</ul>
+              <ul className="filter-list size-list">{SIZE_TABLE.map(({ eu: italian, usMens: american }, index) => <li key={italian}><button type="button" className={sizeIndex === index ? "is-selected" : ""} aria-pressed={sizeIndex === index} aria-label={`IT ${italian}, US ${american}`} onClick={() => selectSize(index)}>IT {italian}<span>US {american}</span></button></li>)}</ul>
             </div>
             <div className="filter-group">
               <h2 className="filter-heading">Price <span>CAD</span></h2>

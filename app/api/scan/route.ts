@@ -44,11 +44,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Too many scans — please wait a moment and try again." }, { status: 429, headers: { "Retry-After": "60" } });
   }
   const params = new URL(request.url).searchParams;
-  const requestedIT = Number(params.get("sizeIT") ?? 42);
-  const sizeIT = Number.isFinite(requestedIT) ? requestedIT : 42;
+  // Only sizes on the picker's chart (IT 38–47) are scanned; anything else
+  // falls back to IT 42 rather than being searched under a guessed US size.
+  const { eu: sizeIT, usMens: sizeUS } = euToUS(Number(params.get("sizeIT") ?? 42)) ?? euToUS(42)!;
   const requestedCondition = params.get("condition") ?? "either";
   const condition = conditionValues.includes(requestedCondition as Condition) ? requestedCondition as Condition : "either";
-  const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
   const requestedSources = params.get("sources")?.split(",");
   const adapters = requestedSources ? liveAdapters.filter((adapter) => requestedSources.includes(adapter.name)) : liveAdapters;
   if (adapters.includes(ssenseAdapter)) after(() => crawlSsense());
