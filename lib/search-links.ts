@@ -14,15 +14,15 @@ export function farfetchSearchUrl(): string {
 }
 
 export function ssenseSearchUrl(): string {
-  return `https://www.ssense.com/en-us/men?q=${encodeURIComponent(QUERY)}`;
+  return `https://www.ssense.com/en-ca/men?q=${encodeURIComponent(QUERY)}`;
 }
 
 export function mytheresaSearchUrl(): string {
-  return `https://www.mytheresa.com/us/en/search?q=${encodeURIComponent(QUERY)}`;
+  return "https://www.mytheresa.com/ca/en/men/designers/maison-margiela";
 }
 
 export function cettireSearchUrl(): string {
-  return `https://www.cettire.com/search?q=${encodeURIComponent(QUERY)}`;
+  return `https://www.cettire.com/ca/pages/search?q=${encodeURIComponent(QUERY)}`;
 }
 
 export function mrPorterSearchUrl(): string {
@@ -30,5 +30,5 @@ export function mrPorterSearchUrl(): string {
 }
 
 export function endClothingSearchUrl(): string {
-  return `https://www.endclothing.com/us/catalogsearch/result/?q=${encodeURIComponent(QUERY)}`;
+  return "https://www.endclothing.com/ca/brands/maison-margiela";
 }

@@ -1,6 +1,8 @@
 import type { Browser } from "playwright-core";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
+import { isLowTopReplica, parseEuSize } from "../matching";
+import { cached, RETAIL_CACHE_MS } from "../cache";
 
 // Running headless Chromium inside a Vercel serverless function needs more
 // memory than the Hobby plan allows configuring (Pro/Enterprise-only), so
@@ -19,6 +21,8 @@ async function launchBrowser(): Promise<Browser> {
   return localChromium.launch({ headless: true });
 }
 
+const USER_AGENT = "Mozilla/5.0 (compatible; MargielaFinder/1.0)";
+
 // SSENSE embeds a schema.org Product JSON-LD block per result card (meant for
 // search-engine rich snippets) — reading that directly is far more reliable
 // than parsing the rendered layout, which is Tailwind-class-driven and
@@ -30,7 +34,8 @@ async function launchBrowser(): Promise<Browser> {
 // read its embedded `sizes` array and confirm the requested IT size is
 // actually in stock. Anything that can't be confirmed in-stock in that exact
 // size is dropped rather than shown as a guess. No cap on how many
-// candidates get checked — every match is verified.
+// candidates get checked — every match is verified. Searches the Canadian
+// storefront, so prices are SSENSE's own CAD prices.
 
 interface SsenseProduct {
   name: string;
@@ -74,18 +79,30 @@ function extractSizes(html: string): SsenseSizeEntry[] {
   }
 }
 
-async function checkSizeInStock(browser: Browser, url: string, sizeIT: number): Promise<boolean | null> {
-  const page = await browser.newPage({ userAgent: "Mozilla/5.0 (compatible; MargielaFinder/1.0)" });
+// Throws rather than returning an empty table when a page can't be read, so
+// a failed load isn't cached as "nothing in stock" for every size.
+async function loadSizes(browser: Browser, url: string): Promise<SsenseSizeEntry[]> {
+  const page = await browser.newPage({ userAgent: USER_AGENT });
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
-    const html = await page.content();
-    const sizes = extractSizes(html);
-    const match = sizes.find((size) => size.name === `IT ${sizeIT}`);
+    const sizes = extractSizes(await page.content());
+    if (!sizes.length) throw new Error(`No size table found on ${url}`);
+    return sizes;
+  } finally {
+    await page.close();
+  }
+}
+
+// A product page lists stock for every size, so it's cached per product —
+// switching the size picker re-checks from memory instead of reloading
+// every page.
+async function checkSizeInStock(getBrowser: () => Promise<Browser>, url: string, sizeIT: number): Promise<boolean | null> {
+  try {
+    const sizes = await cached(`ssense:sizes:${url}`, RETAIL_CACHE_MS, async () => loadSizes(await getBrowser(), url));
+    const match = sizes.find((size) => parseEuSize(size.name) === sizeIT);
     return match ? match.stock > 0 : null;
   } catch {
     return null;
-  } finally {
-    await page.close();
   }
 }
 
@@ -97,14 +114,67 @@ async function checkSizeInStock(browser: Browser, url: string, sizeIT: number): 
 // concurrency (and thus timing) predictable.
 const CHECK_BATCH_SIZE = 6;
 
-async function checkAllSizes<T extends { url: string }>(browser: Browser, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
+async function checkAllSizes<T extends { url: string }>(getBrowser: () => Promise<Browser>, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
   const results: (T & { inStock: boolean | null })[] = [];
   for (let i = 0; i < candidates.length; i += CHECK_BATCH_SIZE) {
     const batch = candidates.slice(i, i + CHECK_BATCH_SIZE);
-    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(browser, candidate.url, sizeIT) })));
+    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(getBrowser, candidate.url, sizeIT) })));
     results.push(...batchResults);
   }
   return results;
+}
+
+interface SsenseCandidate {
+  title: string;
+  price: number;
+  currency: string;
+  url: string;
+  imageUrl: string | null;
+}
+
+async function loadCandidates(browser: Browser): Promise<SsenseCandidate[]> {
+  const page = await browser.newPage({ userAgent: USER_AGENT });
+  try {
+    await page.goto(ssenseSearchUrl(), { waitUntil: "networkidle", timeout: 20000 });
+    const products = await page.evaluate(() => {
+      const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
+      return scripts
+        .map((script) => { try { return JSON.parse(script.textContent ?? ""); } catch { return null; } })
+        .filter((product) => product && product["@type"] === "Product");
+    }) as SsenseProduct[];
+    // This search always has results, so an empty grid means the page was
+    // blocked or its layout changed — fail loudly rather than cache "none".
+    if (!products.length) throw new Error("SSENSE search page returned no products");
+    return products.flatMap((product) => {
+      const brand = (product.brand?.name ?? "").toLowerCase();
+      const name = product.name ?? "";
+      if (!brand.includes("margiela") || !isLowTopReplica(name)) return [];
+      const price = product.offers?.price;
+      const url = product.offers?.url ?? product.url;
+      if (!Number.isFinite(price) || !url) return [];
+      const filename = product.image?.split("/").pop();
+      return [{
+        title: `Maison Margiela ${name}`,
+        price: price as number,
+        currency: product.offers?.priceCurrency ?? "CAD",
+        url,
+        imageUrl: filename ? `https://img.ssensemedia.com/image/upload/f_auto,c_limit,w_600,q_85/${filename}` : null,
+      }];
+    }).sort((first, second) => first.price - second.price);
+  } finally {
+    await page.close();
+  }
+}
+
+// Launches the browser only if something actually needs loading — when the
+// search grid and every candidate's sizes are already cached, a scan never
+// starts Chromium at all.
+function lazyBrowser() {
+  let launching: Promise<Browser> | null = null;
+  return {
+    get: () => (launching ??= launchBrowser()),
+    close: async () => { if (launching) await launching.then((browser) => browser.close(), () => undefined); },
+  };
 }
 
 export const ssenseAdapter: SourceAdapter = {
@@ -112,37 +182,10 @@ export const ssenseAdapter: SourceAdapter = {
   sourceType: "scrape",
   async search(params: ScanParams): Promise<Listing[]> {
     if (params.condition === "used") return [];
-    const browser = await launchBrowser();
+    const browser = lazyBrowser();
     try {
-      const page = await browser.newPage({ userAgent: "Mozilla/5.0 (compatible; MargielaFinder/1.0)" });
-      await page.goto(ssenseSearchUrl(), { waitUntil: "networkidle", timeout: 20000 });
-      const products = await page.evaluate(() => {
-        const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
-        return scripts
-          .map((script) => { try { return JSON.parse(script.textContent ?? ""); } catch { return null; } })
-          .filter((product) => product && product["@type"] === "Product");
-      }) as SsenseProduct[];
-      await page.close();
-
-      const candidates = products.flatMap((product) => {
-        const brand = (product.brand?.name ?? "").toLowerCase();
-        const name = product.name ?? "";
-        if (!brand.includes("margiela") || !name.toLowerCase().includes("replica")) return [];
-        const price = product.offers?.price;
-        const url = product.offers?.url ?? product.url;
-        if (!Number.isFinite(price) || !url) return [];
-        const filename = product.image?.split("/").pop();
-        return [{
-          title: `Maison Margiela ${name}`,
-          price: price as number,
-          currency: product.offers?.priceCurrency ?? "USD",
-          url,
-          imageUrl: filename ? `https://img.ssensemedia.com/image/upload/f_auto,c_limit,w_400,q_85/${filename}` : null,
-        }];
-      }).sort((first, second) => first.price - second.price);
-
-      const checked = await checkAllSizes(browser, candidates, params.sizeIT);
-
+      const candidates = await cached("ssense:search", RETAIL_CACHE_MS, async () => loadCandidates(await browser.get()));
+      const checked = await checkAllSizes(browser.get, candidates, params.sizeIT);
       return checked.flatMap((candidate) => {
         if (candidate.inStock !== true) return [];
         return [{

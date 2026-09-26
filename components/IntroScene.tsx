@@ -44,9 +44,7 @@ export default function IntroScene() {
     <div className="intro-track" ref={trackRef} aria-hidden="true">
       <div className="intro-stage" ref={stageRef} style={{ ["--p" as string]: 0 }}>
         <Image className="intro-sneaker" src="/images/gat-reference.png" alt="" width={1427} height={588} unoptimized />
-        <div className="intro-mark">
-          <i />
-        </div>
+        <p className="intro-wordmark">GAT SCAN</p>
         <p className="intro-hint">Scroll<span>↓</span></p>
       </div>
     </div>

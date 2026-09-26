@@ -5,7 +5,8 @@ import type { NextConfig } from "next";
 // the site — a nonce-based CSP would close that gap but needs middleware
 // support this app doesn't have yet. Everything else here is a real,
 // meaningful restriction: no third-party scripts/frames/embeds, no
-// cross-origin fetch/XHR targets beyond this origin.
+// cross-origin fetch/XHR targets beyond this origin, and fonts are
+// self-hosted by next/font so nothing loads from Google at runtime.
 // 'unsafe-eval' is added in development only — React's dev-mode debugging
 // tools use eval() to reconstruct stack traces, but React never uses eval()
 // in a production build, so the stricter policy ships to Vercel.
@@ -13,8 +14,8 @@ const scriptSrc = process.env.NODE_ENV === "production" ? "script-src 'self' 'un
 const csp = [
   "default-src 'self'",
   scriptSrc,
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
   "img-src 'self' data:",
   "connect-src 'self'",
   "frame-ancestors 'none'",

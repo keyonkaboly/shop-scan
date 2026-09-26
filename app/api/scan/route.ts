@@ -1,27 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cettireSearchUrl, endClothingSearchUrl, ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl, mytheresaSearchUrl } from "@/lib/search-links";
+import { ebaySearchUrl, farfetchSearchUrl, mrPorterSearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
 import { ssenseAdapter } from "@/lib/adapters/ssense";
+import { cettireAdapter } from "@/lib/adapters/cettire";
+import { mytheresaAdapter } from "@/lib/adapters/mytheresa";
+import { endAdapter } from "@/lib/adapters/end";
 import { makeRetailStubAdapter } from "@/lib/adapters/retail-affiliate-stub";
 import { getRateToCAD } from "@/lib/currency";
 import { clientIp, isRateLimited } from "@/lib/rate-limit";
-import type { Condition, Listing } from "@/lib/adapters/types";
+import type { Condition, Listing, SourceAdapter } from "@/lib/adapters/types";
 
 export const runtime = "nodejs";
 
+const liveAdapters = [ebayAdapter, grailedAdapter, ssenseAdapter, cettireAdapter, mytheresaAdapter, endAdapter];
 const retailStubs = [
   makeRetailStubAdapter("Farfetch", farfetchSearchUrl()),
-  makeRetailStubAdapter("Mytheresa", mytheresaSearchUrl()),
-  makeRetailStubAdapter("Cettire", cettireSearchUrl()),
   makeRetailStubAdapter("MR PORTER", mrPorterSearchUrl()),
-  makeRetailStubAdapter("END.", endClothingSearchUrl()),
 ];
+// SSENSE drives a real browser per product; Cettire makes one live stock
+// call per candidate; the rest are single API calls.
+const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 40000, Cettire: 15000, Mytheresa: 10000, "END.": 8000 };
 
 const conditionValues: Condition[] = ["new", "used", "either"];
 
-async function searchWithTimeout(adapter: (typeof retailStubs)[number] | typeof ebayAdapter | typeof grailedAdapter | typeof ssenseAdapter, params: { sizeIT: number; sizeUS: number; condition: Condition }, timeoutMs: number) {
+async function searchWithTimeout(adapter: SourceAdapter, params: { sizeIT: number; sizeUS: number; condition: Condition }, timeoutMs: number) {
   let timeoutId: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => reject(new Error(`${adapter.name} scan timed out`)), timeoutMs);
@@ -43,8 +47,7 @@ export async function GET(request: NextRequest) {
   const requestedCondition = params.get("condition") ?? "either";
   const condition = conditionValues.includes(requestedCondition as Condition) ? requestedCondition as Condition : "either";
   const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
-  const adapters = [ebayAdapter, grailedAdapter, ssenseAdapter, ...retailStubs];
-  const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 40000 };
+  const adapters = [...liveAdapters, ...retailStubs];
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
@@ -78,9 +81,7 @@ export async function GET(request: NextRequest) {
     unavailableSources: [...failures, ...retailStubs.map((adapter) => adapter.name)],
     ...(debugAuthorized ? { sourceErrors } : {}),
     sourceStatus: {
-      eBay: failures.includes("eBay") ? "unavailable" : listings.some((listing) => listing.marketplace === "eBay") ? "live" : "checked-no-match",
-      Grailed: failures.includes("Grailed") ? "unavailable" : listings.some((listing) => listing.marketplace === "Grailed") ? "live" : "checked-no-match",
-      SSENSE: failures.includes("SSENSE") ? "unavailable" : listings.some((listing) => listing.marketplace === "SSENSE") ? "live" : "checked-no-match",
+      ...Object.fromEntries(liveAdapters.map(({ name }) => [name, failures.includes(name) ? "unavailable" : listings.some((listing) => listing.marketplace === name) ? "live" : "checked-no-match"])),
       retail: "search-link-only",
     },
     fallbackSearches: {

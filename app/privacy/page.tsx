@@ -21,7 +21,7 @@ export default function PrivacyPolicy() {
     <p>We do not set first-party tracking or advertising cookies ourselves. If you click through to a retailer (eBay, Grailed, Farfetch, SSENSE, Mytheresa, Cettire, MR PORTER, END., or others), that retailer may set its own cookie on its own site — that is governed by their privacy policy, not ours.</p>
 
     <h2>Third-party data sources</h2>
-    <p>Listing data is fetched live from eBay&rsquo;s Browse API and, best-effort, from Grailed. Listing thumbnails are proxied through our own server from eBay/Grailed image hosts so your browser never contacts those hosts directly. Currency conversion uses a third-party exchange-rate provider.</p>
+    <p>Listing data is fetched live by our server from eBay&rsquo;s Browse API, Grailed, SSENSE, Cettire, Mytheresa and END. Listing thumbnails are proxied through our own server from those stores&rsquo; image hosts, so your browser never contacts them directly. Currency conversion uses a third-party exchange-rate provider.</p>
 
     <h2>Analytics</h2>
     <p>We do not currently run any analytics or advertising tracking on this site. If that changes, this page will be updated first.</p>

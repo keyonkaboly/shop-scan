@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clientIp, isRateLimited } from "@/lib/rate-limit";
 
-const allowedHosts = new Set(["i.ebayimg.com", "media-assets.grailed.com", "img.ssensemedia.com"]);
+// d3vfig6e0r0snz.cloudfront.net is Cettire's own image CDN.
+const allowedHosts = new Set(["i.ebayimg.com", "media-assets.grailed.com", "img.ssensemedia.com", "d3vfig6e0r0snz.cloudfront.net", "media.endclothing.com", "img.mytheresa.com"]);
 
 export async function GET(request: NextRequest) {
   if (isRateLimited(clientIp(request), 120, 60_000)) {
