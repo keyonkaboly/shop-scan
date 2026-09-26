@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@sparticuz/chromium": "153.0.0",
+    "@vercel/analytics": "^2.0.1",
     "@vercel/functions": "^3.9.9",
     "next": "16.3.4",
     "playwright-core": "^1.63.0",

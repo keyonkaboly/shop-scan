@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import { Inter, Newsreader } from "next/font/google";
 import "./globals.css";
 import { getBaseUrl } from "@/lib/site";
@@ -22,5 +23,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
-  return <html lang="en" className={`${sans.variable} ${serif.variable}`}><body>{children}</body></html>;
+  return <html lang="en" className={`${sans.variable} ${serif.variable}`}><body>{children}<Analytics /></body></html>;
 }
