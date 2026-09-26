@@ -30,7 +30,7 @@ export default function Terms() {
     <p>We may update these terms as the site changes. Continued use after an update means you accept the revised terms.</p>
 
     <h2>Governing law</h2>
-    <p><span className="legal-placeholder">[confirm your governing jurisdiction here]</span>.</p>
+    <p><span className="legal-placeholder">[In accordance with the laws of the Province of British Columbia]</span>.</p>
 
     <h2>Contact</h2>
     <p><span className="legal-placeholder">keyonkaboly@gmail.com</span>.</p>
