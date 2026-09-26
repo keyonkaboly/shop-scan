@@ -1,9 +1,10 @@
 // Per-instance, in-memory memo for upstream responses that already cover
 // every size at once (a retailer's whole Replica listing, one product's
 // size/stock table). Switching size or condition re-runs a scan within
-// seconds, and re-fetching identical data each time is slow (SSENSE loads a
-// real page per product) and trips retailer rate limits (Mytheresa answers
-// PRODUCT_LISTING_PAGE_TOO_MANY_REQUESTS after a handful of rapid calls).
+// seconds, and re-fetching identical data each time is slow and trips
+// retailer rate limits (Mytheresa answers PRODUCT_LISTING_PAGE_TOO_MANY_REQUESTS
+// after a handful of rapid calls). SSENSE uses Vercel's shared Runtime Cache
+// instead (see adapters/ssense.ts).
 // Concurrent callers share one in-flight request, and failures are evicted
 // immediately so the next scan retries instead of replaying the error.
 const entries = new Map<string, { value: Promise<unknown>; expiresAt: number }>();

@@ -1,9 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { ebaySearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
-import { ssenseAdapter, ssenseCoverage, ssenseTrace } from "@/lib/adapters/ssense";
+import { crawlSsense, lastSsenseCrawl, ssenseAdapter, ssenseCoverage, ssenseTrace } from "@/lib/adapters/ssense";
 import { cettireAdapter } from "@/lib/adapters/cettire";
 import { mytheresaAdapter } from "@/lib/adapters/mytheresa";
 import { endAdapter } from "@/lib/adapters/end";
@@ -12,13 +12,16 @@ import { clientIp, isRateLimited } from "@/lib/rate-limit";
 import type { Condition, Listing, SourceAdapter } from "@/lib/adapters/types";
 
 export const runtime = "nodejs";
+// Room for the background SSENSE crawl that runs after a scan responds.
+export const maxDuration = 60;
 
 const liveAdapters = [ebayAdapter, grailedAdapter, ssenseAdapter, cettireAdapter, mytheresaAdapter, endAdapter];
-// SSENSE drives a real browser and can take close to a minute on a cold
-// start, so the page requests it separately (?sources=SSENSE) instead of
-// making every other store wait for it. Cettire makes one live stock call
-// per candidate; the rest are single API calls.
-const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 60000, Cettire: 15000, Mytheresa: 10000, "END.": 8000 };
+// SSENSE answers from its shared cache (its pages are read by a background
+// crawl), but the very first scan loads its search page in a real browser,
+// and the page requests it separately (?sources=SSENSE) so no other store
+// ever waits on it. Cettire makes one live stock call per candidate; the
+// rest are single API calls.
+const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 20000, Cettire: 15000, Mytheresa: 10000, "END.": 8000 };
 
 const conditionValues: Condition[] = ["new", "used", "either"];
 
@@ -48,6 +51,7 @@ export async function GET(request: NextRequest) {
   const sizeUS = euToUS(sizeIT)?.usMens ?? 9;
   const requestedSources = params.get("sources")?.split(",");
   const adapters = requestedSources ? liveAdapters.filter((adapter) => requestedSources.includes(adapter.name)) : liveAdapters;
+  if (adapters.includes(ssenseAdapter)) after(() => crawlSsense());
   const settled = await Promise.allSettled(adapters.map((adapter) => searchWithTimeout(adapter, { sizeIT, sizeUS, condition }, adapterTimeouts[adapter.name] ?? 4000)));
   const listings: Listing[] = [];
   const failures: string[] = [];
@@ -79,9 +83,9 @@ export async function GET(request: NextRequest) {
     listings: listingsWithCAD,
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: failures,
-    ...(debugAuthorized ? { sourceErrors, ...(adapters.includes(ssenseAdapter) ? { ssenseTrace } : {}) } : {}),
-    // SSENSE confirms sizes a few products per scan, so the page shows how much
-    // of its range has been checked rather than implying the rest are sold out.
+    ...(debugAuthorized ? { sourceErrors, ...(adapters.includes(ssenseAdapter) ? { ssenseTrace, ssenseCrawl: await lastSsenseCrawl() } : {}) } : {}),
+    // SSENSE's sizes are read a few products at a time, so the page shows how
+    // much of its range is known rather than implying the rest are sold out.
     ...(adapters.includes(ssenseAdapter) ? { coverage: { SSENSE: { ...ssenseCoverage } } } : {}),
     sourceStatus: {
       ...Object.fromEntries(adapters.map(({ name }) => [name, failures.includes(name) ? "unavailable" : listings.some((listing) => listing.marketplace === name) ? "live" : "checked-no-match"])),

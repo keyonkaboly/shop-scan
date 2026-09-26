@@ -17,9 +17,9 @@ const conditions: [Condition, string][] = [["new", "New"], ["used", "Used"], ["e
 const manualSources = [["SSENSE", ssenseSearchUrl()], ["Mytheresa", mytheresaSearchUrl()], ["Cettire", cettireSearchUrl()], ["END.", endClothingSearchUrl()]] as const;
 const liveSourceNames = "eBay, Grailed, SSENSE, Cettire, Mytheresa and END.";
 const PAGE_SIZE = 24;
-// SSENSE needs a real browser and can take close to a minute on a cold
-// start, so it's fetched as its own request: every other store shows up in
-// seconds and SSENSE's pairs merge in when they arrive.
+// SSENSE needs a real browser (its first scan loads a page before it can
+// answer), so it's fetched as its own request: every other store shows up
+// in seconds and SSENSE's pairs merge in when they arrive.
 const FAST_SOURCES = ["eBay", "Grailed", "Cettire", "Mytheresa", "END."];
 const SLOW_SOURCES = ["SSENSE"];
 const emptyScan: ScanResponse = { listings: [], unavailableSources: [], scannedAt: "" };
@@ -63,9 +63,9 @@ export default function Home() {
   const verifiedListings = ebayVerifiedOnly ? allListings.filter((listing) => listing.marketplace !== "eBay" || listing.authenticityGuaranteed) : allListings;
   const hiddenUnverified = allListings.length - verifiedListings.length;
   const ssensePending = slowLoading && condition !== "used";
-  // SSENSE confirms sizes a few pairs per scan (its Cloudflare limits how
-  // fast pages can be read), so say how far it got instead of letting
-  // unchecked pairs look sold out.
+  // SSENSE's sizes are read a few pairs at a time in the background (its
+  // Cloudflare limits how fast pages can be read), so say how many are
+  // known instead of letting unchecked pairs look sold out.
   const ssenseCoverage = slowScan.coverage?.SSENSE;
   const ssensePartial = !slowLoading && ssenseCoverage && ssenseCoverage.checked < ssenseCoverage.total ? `SSENSE: ${ssenseCoverage.checked} of ${ssenseCoverage.total} pairs checked so far` : null;
   const priceFilteredListings = verifiedListings.filter((listing) => (minPrice == null || priceOf(listing) >= minPrice) && (maxPrice == null || priceOf(listing) <= maxPrice));
@@ -105,7 +105,7 @@ export default function Home() {
         return;
       }
       setSlowLoading(true);
-      fetchScan(query, SLOW_SOURCES, controller.signal, 70000)
+      fetchScan(query, SLOW_SOURCES, controller.signal, 30000)
         .then(setSlowScan)
         .catch(() => { if (!controller.signal.aborted) setSlowScan({ ...emptyScan, unavailableSources: SLOW_SOURCES }); })
         .finally(() => { if (!controller.signal.aborted) setSlowLoading(false); });

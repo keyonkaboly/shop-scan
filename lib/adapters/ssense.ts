@@ -1,8 +1,71 @@
 import type { Browser, BrowserContext, Page } from "playwright-core";
+import { getCache } from "@vercel/functions";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
 import { isLowTopReplica, parseEuSize } from "../matching";
-import { cached } from "../cache";
+
+// SSENSE embeds a schema.org Product JSON-LD block per result card (meant for
+// search-engine rich snippets) — reading that directly is far more reliable
+// than parsing the rendered layout, which is Tailwind-class-driven and
+// changes often. SSENSE is authorized new-only retail, so condition is
+// always "new". Per-size stock isn't in the search grid, so each Replica's
+// own product page is read for its embedded `sizes` array (full navigation
+// in a real browser — SSENSE's Cloudflare blocks plain HTTP requests).
+// Anything that can't be confirmed in stock in that exact size is dropped
+// rather than shown as a guess. Uses the Canadian storefront, so prices are
+// SSENSE's own CAD prices.
+//
+// SSENSE's Cloudflare challenges a browser after a few quick product-page
+// loads and grows stricter the more it sees, so scans never read product
+// pages themselves. Instead:
+// - Each product's stock (for every size) lives in Vercel's Runtime Cache,
+//   shared by all of the app's servers, and scans answer from it instantly.
+// - After responding, a scan starts a background crawl (one at a time app-
+//   wide) that reads a few missing or oldest product pages, slowly, and
+//   saves them. Stock is re-read about every 3 hours.
+// - If Cloudflare challenges the crawler, crawling pauses for 20 minutes.
+// That keeps SSENSE's traffic to a handful of page loads an hour in total.
+// Outside Vercel the Runtime Cache falls back to process memory.
+
+const USER_AGENT = "Mozilla/5.0 (compatible; MargielaFinder/1.0)";
+const SEARCH_TTL_S = 6 * 60 * 60;
+const SEARCH_REFRESH_MS = 2 * 60 * 60 * 1000;
+const SIZES_TTL_S = 12 * 60 * 60;
+const SIZES_REFRESH_MS = 3 * 60 * 60 * 1000;
+const COOLDOWN_S = 20 * 60;
+const LOCK_S = 120;
+const PAGES_PER_CRAWL = 6;
+const PAUSE_BETWEEN_PAGES_MS = 3000;
+
+interface SsenseCandidate {
+  title: string;
+  price: number;
+  currency: string;
+  url: string;
+  imageUrl: string | null;
+}
+interface SsenseSizeEntry { name: string; stock: number }
+interface StoredSearch { candidates: SsenseCandidate[]; fetchedAt: number }
+interface StoredSizes { sizes: SsenseSizeEntry[]; fetchedAt: number }
+
+const store = () => getCache({ namespace: "gatscan-ssense" });
+const sizesKey = (url: string) => `sizes:${url.split("/").pop()}`;
+
+// Timeline of the latest SSENSE scan on this server, returned by /api/scan
+// only to requests carrying DEBUG_TOKEN (with the latest background crawl's
+// log) — the one way to see what happened on Vercel.
+export const ssenseTrace: string[] = [];
+let traceStartedAt = Date.now();
+function trace(step: string) {
+  ssenseTrace.push(`${((Date.now() - traceStartedAt) / 1000).toFixed(1)}s ${step}`);
+}
+export async function lastSsenseCrawl(): Promise<unknown> {
+  return store().get("last-crawl").catch(() => null);
+}
+
+// How much of SSENSE's Replica range has known sizes, so the page can say
+// "6 of 15 checked" instead of implying the rest are out of stock.
+export const ssenseCoverage = { checked: 0, total: 0 };
 
 // On Vercel there's no local browser, so the function launches the
 // Lambda-sized Chromium build from @sparticuz/chromium (pinned to the same
@@ -23,69 +86,45 @@ async function launchBrowser(): Promise<Browser> {
   return localChromium.launch({ headless: true });
 }
 
-// SSENSE embeds a schema.org Product JSON-LD block per result card (meant for
-// search-engine rich snippets) — reading that directly is far more reliable
-// than parsing the rendered layout, which is Tailwind-class-driven and
-// changes often. SSENSE is authorized new-only retail, so condition is
-// always "new". Per-size stock isn't in the search grid, so each Replica's
-// own product page is opened to read its embedded `sizes` array (full
-// navigation — SSENSE's Cloudflare rules block a plain in-page fetch()).
-// Anything that can't be confirmed in stock in that exact size is dropped
-// rather than shown as a guess. Uses the Canadian storefront, so prices are
-// SSENSE's own CAD prices.
-//
-// SSENSE's Cloudflare starts challenging after a few quick page loads (and
-// grows stricter the more it sees), while listing pages filtered by size are
-// challenged outright. So the scraper is deliberately slow and keeps what it
-// learns: product pages are opened one at a time with a pause between
-// them, each page's stock for every size is kept for 30 minutes, and a scan
-// that runs out of time or gets challenged simply stops — the next scan
-// (for any size) carries on from where it left off. Scans run in the
-// background of the page, so pacing costs the visitor nothing.
-const USER_AGENT = "Mozilla/5.0 (compatible; MargielaFinder/1.0)";
-const SSENSE_CACHE_MS = 30 * 60 * 1000;
-const PAUSE_BETWEEN_PAGES_MS = 2500;
-// Enough for a cold start to read all ~15 Replica pages at this pace, with
-// room under the route's 60s SSENSE timeout for a page already loading.
-const SCAN_BUDGET_MS = 45_000;
+// Cookies from the previous browser session on this server, reused like a
+// returning visitor's browser would.
+let savedCookies: Awaited<ReturnType<BrowserContext["storageState"]>> | undefined;
 
-// Timeline of the latest SSENSE scan, returned by /api/scan only to requests
-// carrying DEBUG_TOKEN — the one way to see what the browser did on Vercel,
-// where there's no console to watch.
-export const ssenseTrace: string[] = [];
-let traceStartedAt = Date.now();
-function trace(step: string) {
-  ssenseTrace.push(`${((Date.now() - traceStartedAt) / 1000).toFixed(1)}s ${step}`);
+// Pages load as they would for a visitor with an ad blocker: SSENSE's own
+// content and images plus Cloudflare's check, third-party ads and analytics
+// skipped.
+async function withBrowser<T>(log: (step: string) => void, run: (context: BrowserContext) => Promise<T>): Promise<T> {
+  log("launching browser");
+  const browser = await launchBrowser();
+  try {
+    const context = await browser.newContext({ userAgent: USER_AGENT, storageState: savedCookies });
+    await context.route("**/*", (route) => {
+      const host = new URL(route.request().url()).hostname;
+      const firstParty = host.endsWith("ssense.com") || host.endsWith("ssensemedia.com") || host.endsWith("cloudflare.com");
+      return firstParty ? route.continue() : route.abort();
+    });
+    const result = await run(context);
+    savedCookies = await context.storageState().catch(() => savedCookies);
+    return result;
+  } finally {
+    await browser.close();
+  }
 }
 
-// How much of SSENSE's Replica range the latest scan could confirm sizes
-// for, so the page can say "6 of 15 checked" instead of implying the rest
-// are out of stock.
-export const ssenseCoverage = { checked: 0, total: 0 };
+class CloudflareChallenge extends Error {}
 
 // Cloudflare sometimes answers with its automatic "Just a moment..." check,
 // which a normal browser clears by itself within a few seconds before
 // redirecting to the real page. Wait briefly for that instead of reading the
-// interstitial; if it doesn't clear, the caller treats the page as unreadable.
+// interstitial; if it doesn't clear, stop — pushing on only makes it stricter.
 async function waitPastInterstitial(page: Page): Promise<void> {
   if (!/just a moment/i.test(await page.title())) return;
-  trace(`Cloudflare check on ${page.url().split("?")[0]}, waiting`);
-  await page.waitForFunction(() => !/just a moment/i.test(document.title), null, { timeout: 5000 });
-  await page.waitForLoadState("domcontentloaded");
-}
-
-interface SsenseProduct {
-  name: string;
-  productID?: string;
-  brand?: { name?: string };
-  offers?: { price?: number; priceCurrency?: string; url?: string };
-  url?: string;
-  image?: string;
-}
-
-interface SsenseSizeEntry {
-  name: string;
-  stock: number;
+  try {
+    await page.waitForFunction(() => !/just a moment/i.test(document.title), null, { timeout: 5000 });
+    await page.waitForLoadState("domcontentloaded");
+  } catch {
+    throw new CloudflareChallenge(`Cloudflare check on ${page.url().split("?")[0]} didn't clear`);
+  }
 }
 
 function extractSizes(html: string): SsenseSizeEntry[] {
@@ -117,52 +156,36 @@ function extractSizes(html: string): SsenseSizeEntry[] {
   }
 }
 
-// Throws rather than returning an empty table when a page can't be read, so
-// a failed load isn't cached as "nothing in stock" for every size.
 async function loadSizes(context: BrowserContext, url: string): Promise<SsenseSizeEntry[]> {
   const page = await context.newPage();
-  const id = url.split("/").pop();
   try {
-    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
     await waitPastInterstitial(page);
     const sizes = extractSizes(await page.content());
-    trace(`product ${id}: HTTP ${response?.status()} → ${sizes.length} sizes`);
     if (!sizes.length) throw new Error(`No size table found on ${url}`);
     return sizes;
-  } catch (error) {
-    trace(`product ${id} failed: ${error instanceof Error ? error.message.split("\n")[0] : error}`);
-    throw error;
   } finally {
     await page.close();
   }
 }
 
-interface SsenseCandidate {
-  title: string;
-  price: number;
-  currency: string;
-  url: string;
-  imageUrl: string | null;
-}
-
-async function loadCandidates(context: BrowserContext): Promise<SsenseCandidate[]> {
+async function loadCandidates(context: BrowserContext, log: (step: string) => void): Promise<SsenseCandidate[]> {
   const page = await context.newPage();
   try {
     // The product JSON-LD is server-rendered, so it's there as soon as the
     // HTML is — no need to wait for the page's ad/analytics requests.
     const response = await page.goto(ssenseSearchUrl(), { waitUntil: "domcontentloaded", timeout: 20000 });
-    trace(`search page: HTTP ${response?.status()} "${await page.title()}"`);
+    log(`search page: HTTP ${response?.status()}`);
     await waitPastInterstitial(page);
     const products = await page.evaluate(() => {
       const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
       return scripts
         .map((script) => { try { return JSON.parse(script.textContent ?? ""); } catch { return null; } })
         .filter((product) => product && product["@type"] === "Product");
-    }) as SsenseProduct[];
+    }) as { name?: string; brand?: { name?: string }; offers?: { price?: number; priceCurrency?: string; url?: string }; url?: string; image?: string }[];
     // This search always has results, so an empty grid means the page was
-    // blocked or its layout changed — fail loudly rather than cache "none".
+    // blocked or its layout changed — fail loudly rather than store "none".
     if (!products.length) throw new Error("SSENSE search page returned no products");
-    trace(`search page: ${products.length} products`);
     return products.flatMap((product) => {
       const brand = (product.brand?.name ?? "").toLowerCase();
       const name = product.name ?? "";
@@ -184,77 +207,79 @@ async function loadCandidates(context: BrowserContext): Promise<SsenseCandidate[
   }
 }
 
-// Cookies from the previous scan, reused like a returning visitor's browser
-// would rather than arriving as a stranger every time.
-let savedCookies: Awaited<ReturnType<BrowserContext["storageState"]>> | undefined;
-
-// One browser session per scan, shared by every page. Pages load as they
-// would for a visitor with an ad blocker: SSENSE's own content and images
-// plus Cloudflare's check, with third-party ads and analytics skipped. The
-// browser is only launched if something actually needs loading — when the
-// search grid and every candidate's sizes are cached, a scan never starts
-// Chromium at all.
-type ScanSession = ReturnType<typeof lazySession>;
-
-function lazySession() {
-  let launching: Promise<{ browser: Browser; context: BrowserContext }> | null = null;
-  const open = async () => {
-    trace("launching browser");
-    const browser = await launchBrowser();
-    trace("browser ready");
-    const context = await browser.newContext({ userAgent: USER_AGENT, storageState: savedCookies });
-    await context.route("**/*", (route) => {
-      const host = new URL(route.request().url()).hostname;
-      const firstParty = host.endsWith("ssense.com") || host.endsWith("ssensemedia.com") || host.endsWith("cloudflare.com");
-      return firstParty ? route.continue() : route.abort();
-    });
-    return { browser, context };
-  };
-  return {
-    challenged: false,
-    get: async () => (await (launching ??= open())).context,
-    close: async () => {
-      if (!launching) return;
-      await launching.then(async ({ browser, context }) => {
-        savedCookies = await context.storageState().catch(() => savedCookies);
-        await browser.close();
-      }, () => undefined);
-    },
-  };
+async function fetchSearch(log: (step: string) => void): Promise<StoredSearch> {
+  try {
+    const search = { candidates: await withBrowser(log, (context) => loadCandidates(context, log)), fetchedAt: Date.now() };
+    await store().set("search", search, { ttl: SEARCH_TTL_S });
+    return search;
+  } catch (error) {
+    if (error instanceof CloudflareChallenge) await store().set("cooldown", Date.now(), { ttl: COOLDOWN_S });
+    throw error;
+  }
 }
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Works through the candidates cheapest first, one page at a time. Sizes
-// already known (from this or an earlier scan) cost nothing; a page is only
-// opened while the scan is within budget and Cloudflare hasn't challenged
-// it. Unchecked candidates return null and are picked up by a later scan.
-async function checkSizes(session: ScanSession, candidates: SsenseCandidate[], sizeIT: number, startedAt: number): Promise<(SsenseCandidate & { inStock: boolean | null })[]> {
-  const results: (SsenseCandidate & { inStock: boolean | null })[] = [];
-  let loadedAny = false;
-  for (const candidate of candidates) {
-    const key = `ssense:sizes:${candidate.url}`;
-    let sizes: SsenseSizeEntry[] | null = null;
-    try {
-      sizes = await cached(key, SSENSE_CACHE_MS, async () => {
-        if (session.challenged) throw new Error("skipped: Cloudflare challenged this scan");
-        if (Date.now() - startedAt > SCAN_BUDGET_MS) throw new Error("skipped: out of time this scan");
-        if (loadedAny) await pause(PAUSE_BETWEEN_PAGES_MS);
-        loadedAny = true;
-        try {
-          return await loadSizes(await session.get(), candidate.url);
-        } catch (error) {
-          if (/waitForFunction|just a moment/i.test(String(error))) session.challenged = true;
-          throw error;
-        }
-      });
-    } catch {
-      sizes = null;
-    }
-    const match = sizes?.find((size) => parseEuSize(size.name) === sizeIT);
-    results.push({ ...candidate, inStock: sizes === null ? null : Boolean(match && match.stock > 0) });
+// Set synchronously, so two scans finishing at once on the same server can't
+// both start a crawl; the shared "lock" entry covers other servers.
+let crawling = false;
+
+// Background crawl, run after a scan has responded. Reads up to a few
+// product pages — ones never read first, then the oldest past the refresh
+// age — one at a time with a pause, and saves each to the shared cache. Only
+// one crawl runs app-wide at a time, and a Cloudflare challenge pauses all
+// crawling for 20 minutes.
+export async function crawlSsense(): Promise<void> {
+  if (crawling) return;
+  crawling = true;
+  try {
+    await crawl();
+  } finally {
+    crawling = false;
   }
-  return results;
+}
+
+async function crawl(): Promise<void> {
+  const cache = store();
+  const startedAt = Date.now();
+  const log: string[] = [];
+  const note = (step: string) => log.push(`${((Date.now() - startedAt) / 1000).toFixed(1)}s ${step}`);
+  if (await cache.get("cooldown") || await cache.get("lock")) return;
+  await cache.set("lock", startedAt, { ttl: LOCK_S });
+  try {
+    let search = await cache.get("search") as StoredSearch | null;
+    if (!search || Date.now() - search.fetchedAt > SEARCH_REFRESH_MS) search = await fetchSearch(note);
+    const known = await Promise.all(search.candidates.map((candidate) => cache.get(sizesKey(candidate.url)) as Promise<StoredSizes | null>));
+    const due = search.candidates
+      .map((candidate, index) => ({ candidate, fetchedAt: known[index]?.fetchedAt ?? 0 }))
+      .filter(({ fetchedAt }) => Date.now() - fetchedAt > SIZES_REFRESH_MS)
+      .sort((first, second) => first.fetchedAt - second.fetchedAt)
+      .slice(0, PAGES_PER_CRAWL);
+    note(`${due.length} product pages due`);
+    if (!due.length) return;
+    await withBrowser(note, async (context) => {
+      for (const [index, { candidate }] of due.entries()) {
+        if (index > 0) await pause(PAUSE_BETWEEN_PAGES_MS);
+        try {
+          const sizes = await loadSizes(context, candidate.url);
+          await cache.set(sizesKey(candidate.url), { sizes, fetchedAt: Date.now() } satisfies StoredSizes, { ttl: SIZES_TTL_S });
+          note(`read ${sizesKey(candidate.url)} (${sizes.length} sizes)`);
+        } catch (error) {
+          note(`${sizesKey(candidate.url)} failed: ${error instanceof Error ? error.message.split("\n")[0] : error}`);
+          if (error instanceof CloudflareChallenge) {
+            await cache.set("cooldown", Date.now(), { ttl: COOLDOWN_S });
+            note("Cloudflare challenged — crawling paused for 20 minutes");
+            return;
+          }
+        }
+      }
+    });
+  } catch (error) {
+    note(`crawl failed: ${error instanceof Error ? error.message.split("\n")[0] : error}`);
+  } finally {
+    await cache.delete("lock").catch(() => undefined);
+    await cache.set("last-crawl", log, { ttl: 24 * 60 * 60 }).catch(() => undefined);
+  }
 }
 
 export const ssenseAdapter: SourceAdapter = {
@@ -264,33 +289,37 @@ export const ssenseAdapter: SourceAdapter = {
     if (params.condition === "used") return [];
     ssenseTrace.length = 0;
     traceStartedAt = Date.now();
-    const session = lazySession();
-    try {
-      const candidates = await cached("ssense:search", SSENSE_CACHE_MS, async () => loadCandidates(await session.get()));
-      trace(`${candidates.length} low-top Replica candidates`);
-      const checked = await checkSizes(session, candidates, params.sizeIT, traceStartedAt);
-      const inStock = checked.filter((candidate) => candidate.inStock === true);
-      ssenseCoverage.checked = checked.filter((candidate) => candidate.inStock !== null).length;
-      ssenseCoverage.total = checked.length;
-      trace(`done: ${ssenseCoverage.checked}/${ssenseCoverage.total} checked, ${inStock.length} in stock in IT ${params.sizeIT}`);
-      // Nothing confirmed because Cloudflare cut the scan short isn't "no
-      // stock" — report SSENSE unavailable so the page offers its link.
-      if (!inStock.length && candidates.length > 0 && ssenseCoverage.checked === 0) throw new Error("SSENSE couldn't confirm any sizes this scan (Cloudflare check)");
-      return inStock.map((candidate) => ({
-        marketplace: "SSENSE",
-        title: candidate.title,
-        price: candidate.price,
-        currency: candidate.currency,
-        condition: "new" as const,
-        sizeIT: params.sizeIT,
-        sizeUS: params.sizeUS,
-        url: candidate.url,
-        imageUrl: candidate.imageUrl,
-        scrapedAt: new Date().toISOString(),
-        sourceType: "scrape" as const,
-      }));
-    } finally {
-      await session.close();
+    const cache = store();
+    let search = await cache.get("search") as StoredSearch | null;
+    // The very first scan has no product list yet; SSENSE's search page is
+    // one page load and isn't challenged, so it's fetched on the spot.
+    if (!search) {
+      if (await cache.get("cooldown")) throw new Error("SSENSE crawling is paused after a Cloudflare check");
+      search = await fetchSearch(trace);
     }
+    const known = await Promise.all(search.candidates.map((candidate) => cache.get(sizesKey(candidate.url)) as Promise<StoredSizes | null>));
+    ssenseCoverage.checked = known.filter(Boolean).length;
+    ssenseCoverage.total = search.candidates.length;
+    const inStock = search.candidates.filter((_, index) => {
+      const size = known[index]?.sizes.find((entry) => parseEuSize(entry.name) === params.sizeIT);
+      return Boolean(size && size.stock > 0);
+    });
+    trace(`${ssenseCoverage.checked}/${ssenseCoverage.total} pairs have known sizes, ${inStock.length} in stock in IT ${params.sizeIT}`);
+    // Nothing known yet isn't "no stock" — report SSENSE unavailable (with
+    // its manual link) until the background crawl has read some pages.
+    if (ssenseCoverage.total > 0 && ssenseCoverage.checked === 0) throw new Error("SSENSE sizes haven't been read yet — the background crawl is working through them");
+    return inStock.map((candidate) => ({
+      marketplace: "SSENSE",
+      title: candidate.title,
+      price: candidate.price,
+      currency: candidate.currency,
+      condition: "new" as const,
+      sizeIT: params.sizeIT,
+      sizeUS: params.sizeUS,
+      url: candidate.url,
+      imageUrl: candidate.imageUrl,
+      scrapedAt: new Date().toISOString(),
+      sourceType: "scrape" as const,
+    }));
   },
 };
