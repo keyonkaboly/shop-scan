@@ -10,7 +10,7 @@ const sizes = [[38, 5], [38.5, 5.5], [39, 6], [39.5, 6.5], [40, 7], [40.5, 7.5],
 type Condition = "new" | "used" | "either";
 type Sort = "price-asc" | "price-desc";
 type Listing = { marketplace: string; title: string; price: number; currency: string; cadPrice?: number | null; condition: "new" | "used" | "unknown"; sizeUS: number | null; sizeIT: number | null; url: string; imageUrl: string | null; sourceType: "api" | "scrape" | "affiliate-feed"; authenticityGuaranteed?: boolean };
-type ScanResponse = { listings: Listing[]; unavailableSources: string[]; scannedAt: string; sourceStatus?: Record<string, string>; fallbackSearches?: { eBay?: string } };
+type ScanResponse = { listings: Listing[]; unavailableSources: string[]; scannedAt: string; sourceStatus?: Record<string, string>; fallbackSearches?: { eBay?: string }; coverage?: Record<string, { checked: number; total: number }> };
 type ManualLink = { name: string; url: string; note: string };
 const conditions: [Condition, string][] = [["new", "New"], ["used", "Used"], ["either", "Either"]];
 // Fallback links, shown only when that store's live scan fails.
@@ -63,6 +63,11 @@ export default function Home() {
   const verifiedListings = ebayVerifiedOnly ? allListings.filter((listing) => listing.marketplace !== "eBay" || listing.authenticityGuaranteed) : allListings;
   const hiddenUnverified = allListings.length - verifiedListings.length;
   const ssensePending = slowLoading && condition !== "used";
+  // SSENSE confirms sizes a few pairs per scan (its Cloudflare limits how
+  // fast pages can be read), so say how far it got instead of letting
+  // unchecked pairs look sold out.
+  const ssenseCoverage = slowScan.coverage?.SSENSE;
+  const ssensePartial = !slowLoading && ssenseCoverage && ssenseCoverage.checked < ssenseCoverage.total ? `SSENSE: ${ssenseCoverage.checked} of ${ssenseCoverage.total} pairs checked so far` : null;
   const priceFilteredListings = verifiedListings.filter((listing) => (minPrice == null || priceOf(listing) >= minPrice) && (maxPrice == null || priceOf(listing) <= maxPrice));
   const storeCounts = new Map<string, number>();
   priceFilteredListings.forEach((listing) => storeCounts.set(listing.marketplace, (storeCounts.get(listing.marketplace) ?? 0) + 1));
@@ -221,6 +226,7 @@ export default function Home() {
                 <li><button type="button" className={sourceFilter === null ? "is-selected" : ""} aria-pressed={sourceFilter === null} onClick={() => selectStore(null)}>All stores{!isLoading && ` (${priceFilteredListings.length})`}</button></li>
                 {!isLoading && stores.map((name) => <li key={name}><button type="button" className={sourceFilter === name ? "is-selected" : ""} aria-pressed={sourceFilter === name} onClick={() => selectStore(name)}>{name} ({storeCounts.get(name)})</button></li>)}
                 {!isLoading && ssensePending && <li className="filter-pending">SSENSE (checking…)</li>}
+                {!isLoading && ssensePartial && <li className="filter-pending">{ssensePartial}</li>}
               </ul>
             </div>
             {manualLinks.length > 0 && <div className="filter-group">

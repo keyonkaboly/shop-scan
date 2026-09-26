@@ -3,7 +3,7 @@ import { ebaySearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
-import { ssenseAdapter, ssenseTrace } from "@/lib/adapters/ssense";
+import { ssenseAdapter, ssenseCoverage, ssenseTrace } from "@/lib/adapters/ssense";
 import { cettireAdapter } from "@/lib/adapters/cettire";
 import { mytheresaAdapter } from "@/lib/adapters/mytheresa";
 import { endAdapter } from "@/lib/adapters/end";
@@ -80,6 +80,9 @@ export async function GET(request: NextRequest) {
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: failures,
     ...(debugAuthorized ? { sourceErrors, ...(adapters.includes(ssenseAdapter) ? { ssenseTrace } : {}) } : {}),
+    // SSENSE confirms sizes a few products per scan, so the page shows how much
+    // of its range has been checked rather than implying the rest are sold out.
+    ...(adapters.includes(ssenseAdapter) ? { coverage: { SSENSE: { ...ssenseCoverage } } } : {}),
     sourceStatus: {
       ...Object.fromEntries(adapters.map(({ name }) => [name, failures.includes(name) ? "unavailable" : listings.some((listing) => listing.marketplace === name) ? "live" : "checked-no-match"])),
     },
