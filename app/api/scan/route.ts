@@ -18,7 +18,7 @@ const liveAdapters = [ebayAdapter, grailedAdapter, ssenseAdapter, cettireAdapter
 // start, so the page requests it separately (?sources=SSENSE) instead of
 // making every other store wait for it. Cettire makes one live stock call
 // per candidate; the rest are single API calls.
-const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 55000, Cettire: 15000, Mytheresa: 10000, "END.": 8000 };
+const adapterTimeouts: Record<string, number> = { eBay: 8000, Grailed: 5000, SSENSE: 60000, Cettire: 15000, Mytheresa: 10000, "END.": 8000 };
 
 const conditionValues: Condition[] = ["new", "used", "either"];
 

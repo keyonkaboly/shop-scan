@@ -105,7 +105,7 @@ export default function Home() {
         return;
       }
       setSlowLoading(true);
-      fetchScan(query, SLOW_SOURCES, controller.signal, 60000)
+      fetchScan(query, SLOW_SOURCES, controller.signal, 70000)
         .then(setSlowScan)
         .catch(() => { if (!controller.signal.aborted) setSlowScan({ ...emptyScan, unavailableSources: SLOW_SOURCES }); })
         .finally(() => { if (!controller.signal.aborted) setSlowLoading(false); });

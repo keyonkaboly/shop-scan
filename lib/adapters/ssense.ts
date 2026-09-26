@@ -45,8 +45,9 @@ async function launchBrowser(): Promise<Browser> {
 const USER_AGENT = "Mozilla/5.0 (compatible; MargielaFinder/1.0)";
 const SSENSE_CACHE_MS = 30 * 60 * 1000;
 const PAUSE_BETWEEN_PAGES_MS = 2500;
-// Leaves room under the route's 55s SSENSE timeout for a page already loading.
-const SCAN_BUDGET_MS = 35_000;
+// Enough for a cold start to read all ~15 Replica pages at this pace, with
+// room under the route's 60s SSENSE timeout for a page already loading.
+const SCAN_BUDGET_MS = 45_000;
 
 // Timeline of the latest SSENSE scan, returned by /api/scan only to requests
 // carrying DEBUG_TOKEN — the one way to see what the browser did on Vercel,
