@@ -3,7 +3,7 @@ import { ebaySearchUrl } from "@/lib/search-links";
 import { euToUS } from "@/lib/sizing";
 import { ebayAdapter } from "@/lib/adapters/ebay";
 import { grailedAdapter } from "@/lib/adapters/grailed";
-import { ssenseAdapter } from "@/lib/adapters/ssense";
+import { ssenseAdapter, ssenseTrace } from "@/lib/adapters/ssense";
 import { cettireAdapter } from "@/lib/adapters/cettire";
 import { mytheresaAdapter } from "@/lib/adapters/mytheresa";
 import { endAdapter } from "@/lib/adapters/end";
@@ -74,7 +74,7 @@ export async function GET(request: NextRequest) {
     listings: listingsWithCAD,
     liveSourceCount: new Set(listingsWithCAD.map((listing) => listing.marketplace)).size,
     unavailableSources: failures,
-    ...(debugAuthorized ? { sourceErrors } : {}),
+    ...(debugAuthorized ? { sourceErrors, ssenseTrace } : {}),
     sourceStatus: {
       ...Object.fromEntries(liveAdapters.map(({ name }) => [name, failures.includes(name) ? "unavailable" : listings.some((listing) => listing.marketplace === name) ? "live" : "checked-no-match"])),
     },

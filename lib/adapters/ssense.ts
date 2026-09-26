@@ -1,4 +1,4 @@
-import type { Browser, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page } from "playwright-core";
 import type { Listing, ScanParams, SourceAdapter } from "./types";
 import { ssenseSearchUrl } from "../search-links";
 import { isLowTopReplica, parseEuSize } from "../matching";
@@ -23,12 +23,22 @@ async function launchBrowser(): Promise<Browser> {
   return localChromium.launch({ headless: true });
 }
 
+// Timeline of the latest SSENSE scan, returned by /api/scan only to requests
+// carrying DEBUG_TOKEN — the one way to see what the browser did on Vercel,
+// where there's no console to watch.
+export const ssenseTrace: string[] = [];
+let traceStartedAt = Date.now();
+function trace(step: string) {
+  ssenseTrace.push(`${((Date.now() - traceStartedAt) / 1000).toFixed(1)}s ${step}`);
+}
+
 // Cloudflare sometimes answers with its automatic "Just a moment..." check,
 // which a normal browser clears by itself within a few seconds before
 // redirecting to the real page. Wait for that instead of reading the
 // interstitial; if it never clears, the caller treats the page as unreadable.
 async function waitPastInterstitial(page: Page): Promise<void> {
   if (!/just a moment/i.test(await page.title())) return;
+  trace(`Cloudflare check on ${page.url()}, waiting`);
   await page.waitForFunction(() => !/just a moment/i.test(document.title), null, { timeout: 15000 });
   await page.waitForLoadState("domcontentloaded");
 }
@@ -93,14 +103,19 @@ function extractSizes(html: string): SsenseSizeEntry[] {
 
 // Throws rather than returning an empty table when a page can't be read, so
 // a failed load isn't cached as "nothing in stock" for every size.
-async function loadSizes(browser: Browser, url: string): Promise<SsenseSizeEntry[]> {
-  const page = await browser.newPage({ userAgent: USER_AGENT });
+async function loadSizes(context: BrowserContext, url: string): Promise<SsenseSizeEntry[]> {
+  const page = await context.newPage();
+  const id = url.split("/").pop();
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
+    const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
     await waitPastInterstitial(page);
     const sizes = extractSizes(await page.content());
+    trace(`product ${id}: HTTP ${response?.status()} "${await page.title()}" → ${sizes.length} sizes`);
     if (!sizes.length) throw new Error(`No size table found on ${url}`);
     return sizes;
+  } catch (error) {
+    trace(`product ${id} failed: ${error instanceof Error ? error.message.split("\n")[0] : error}`);
+    throw error;
   } finally {
     await page.close();
   }
@@ -109,9 +124,9 @@ async function loadSizes(browser: Browser, url: string): Promise<SsenseSizeEntry
 // A product page lists stock for every size, so it's cached per product —
 // switching the size picker re-checks from memory instead of reloading
 // every page.
-async function checkSizeInStock(getBrowser: () => Promise<Browser>, url: string, sizeIT: number): Promise<boolean | null> {
+async function checkSizeInStock(getContext: () => Promise<BrowserContext>, url: string, sizeIT: number): Promise<boolean | null> {
   try {
-    const sizes = await cached(`ssense:sizes:${url}`, RETAIL_CACHE_MS, async () => loadSizes(await getBrowser(), url));
+    const sizes = await cached(`ssense:sizes:${url}`, RETAIL_CACHE_MS, async () => loadSizes(await getContext(), url));
     const match = sizes.find((size) => parseEuSize(size.name) === sizeIT);
     return match ? match.stock > 0 : null;
   } catch {
@@ -128,11 +143,11 @@ async function checkSizeInStock(getBrowser: () => Promise<Browser>, url: string,
 // Fewer at once on Vercel, where the function has one vCPU and 2 GB.
 const CHECK_BATCH_SIZE = process.env.VERCEL ? 3 : 6;
 
-async function checkAllSizes<T extends { url: string }>(getBrowser: () => Promise<Browser>, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
+async function checkAllSizes<T extends { url: string }>(getContext: () => Promise<BrowserContext>, candidates: T[], sizeIT: number): Promise<(T & { inStock: boolean | null })[]> {
   const results: (T & { inStock: boolean | null })[] = [];
   for (let i = 0; i < candidates.length; i += CHECK_BATCH_SIZE) {
     const batch = candidates.slice(i, i + CHECK_BATCH_SIZE);
-    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(getBrowser, candidate.url, sizeIT) })));
+    const batchResults = await Promise.all(batch.map(async (candidate) => ({ ...candidate, inStock: await checkSizeInStock(getContext, candidate.url, sizeIT) })));
     results.push(...batchResults);
   }
   return results;
@@ -146,10 +161,14 @@ interface SsenseCandidate {
   imageUrl: string | null;
 }
 
-async function loadCandidates(browser: Browser): Promise<SsenseCandidate[]> {
-  const page = await browser.newPage({ userAgent: USER_AGENT });
+async function loadCandidates(context: BrowserContext): Promise<SsenseCandidate[]> {
+  const page = await context.newPage();
   try {
-    await page.goto(ssenseSearchUrl(), { waitUntil: "networkidle", timeout: 20000 });
+    // The product JSON-LD is server-rendered, so it's there as soon as the
+    // HTML is — waiting for "networkidle" meant waiting on ~30 ad/analytics
+    // requests, which alone could eat most of the time budget on Vercel.
+    const response = await page.goto(ssenseSearchUrl(), { waitUntil: "domcontentloaded", timeout: 20000 });
+    trace(`search page: HTTP ${response?.status()} "${await page.title()}"`);
     await waitPastInterstitial(page);
     const products = await page.evaluate(() => {
       const scripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
@@ -160,6 +179,7 @@ async function loadCandidates(browser: Browser): Promise<SsenseCandidate[]> {
     // This search always has results, so an empty grid means the page was
     // blocked or its layout changed — fail loudly rather than cache "none".
     if (!products.length) throw new Error("SSENSE search page returned no products");
+    trace(`search page: ${products.length} products`);
     return products.flatMap((product) => {
       const brand = (product.brand?.name ?? "").toLowerCase();
       const name = product.name ?? "";
@@ -181,14 +201,32 @@ async function loadCandidates(browser: Browser): Promise<SsenseCandidate[]> {
   }
 }
 
-// Launches the browser only if something actually needs loading — when the
-// search grid and every candidate's sizes are already cached, a scan never
-// starts Chromium at all.
-function lazyBrowser() {
-  let launching: Promise<Browser> | null = null;
+// One browser session per scan, shared by every page, so SSENSE sees one
+// visitor browsing (keeping its cookies) rather than a fresh visitor per
+// product page. Only SSENSE's own documents and scripts plus Cloudflare's
+// check are loaded — images, fonts and third-party trackers are skipped,
+// since only the page data is read. It's launched only if something
+// actually needs loading: when the search grid and every candidate's sizes
+// are cached, a scan never starts Chromium at all.
+function lazyContext() {
+  let launching: Promise<{ browser: Browser; context: BrowserContext }> | null = null;
+  const open = async () => {
+    trace("launching browser");
+    const browser = await launchBrowser();
+    trace("browser ready");
+    const context = await browser.newContext({ userAgent: USER_AGENT });
+    await context.route("**/*", (route) => {
+      const request = route.request();
+      const host = new URL(request.url()).hostname;
+      const firstParty = host.endsWith("ssense.com") || host.endsWith("cloudflare.com");
+      const heavy = ["image", "media", "font"].includes(request.resourceType());
+      return firstParty && !heavy ? route.continue() : route.abort();
+    });
+    return { browser, context };
+  };
   return {
-    get: () => (launching ??= launchBrowser()),
-    close: async () => { if (launching) await launching.then((browser) => browser.close(), () => undefined); },
+    get: async () => (await (launching ??= open())).context,
+    close: async () => { if (launching) await launching.then(({ browser }) => browser.close(), () => undefined); },
   };
 }
 
@@ -197,10 +235,14 @@ export const ssenseAdapter: SourceAdapter = {
   sourceType: "scrape",
   async search(params: ScanParams): Promise<Listing[]> {
     if (params.condition === "used") return [];
-    const browser = lazyBrowser();
+    ssenseTrace.length = 0;
+    traceStartedAt = Date.now();
+    const session = lazyContext();
     try {
-      const candidates = await cached("ssense:search", RETAIL_CACHE_MS, async () => loadCandidates(await browser.get()));
-      const checked = await checkAllSizes(browser.get, candidates, params.sizeIT);
+      const candidates = await cached("ssense:search", RETAIL_CACHE_MS, async () => loadCandidates(await session.get()));
+      trace(`${candidates.length} low-top Replica candidates`);
+      const checked = await checkAllSizes(session.get, candidates, params.sizeIT);
+      trace(`done: ${checked.filter((candidate) => candidate.inStock === true).length} in stock in IT ${params.sizeIT}`);
       return checked.flatMap((candidate) => {
         if (candidate.inStock !== true) return [];
         return [{
@@ -218,7 +260,7 @@ export const ssenseAdapter: SourceAdapter = {
         }];
       });
     } finally {
-      await browser.close();
+      await session.close();
     }
   },
 };
