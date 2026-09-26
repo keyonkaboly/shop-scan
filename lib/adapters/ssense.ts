@@ -34,6 +34,9 @@ const SIZES_TTL_S = 12 * 60 * 60;
 const SIZES_REFRESH_MS = 3 * 60 * 60 * 1000;
 const COOLDOWN_S = 20 * 60;
 const LOCK_S = 120;
+// Minimum gap between crawls app-wide, so visitors flipping through sizes
+// can't chain crawls back-to-back into a burst of page loads.
+const CRAWL_REST_S = 150;
 const PAGES_PER_CRAWL = 6;
 const PAUSE_BETWEEN_PAGES_MS = 3000;
 
@@ -227,8 +230,8 @@ let crawling = false;
 // Background crawl, run after a scan has responded. Reads up to a few
 // product pages — ones never read first, then the oldest past the refresh
 // age — one at a time with a pause, and saves each to the shared cache. Only
-// one crawl runs app-wide at a time, and a Cloudflare challenge pauses all
-// crawling for 20 minutes.
+// one crawl runs app-wide at a time, at most one every 2½ minutes, and a
+// Cloudflare challenge pauses all crawling for 20 minutes.
 export async function crawlSsense(): Promise<void> {
   if (crawling) return;
   crawling = true;
@@ -244,7 +247,7 @@ async function crawl(): Promise<void> {
   const startedAt = Date.now();
   const log: string[] = [];
   const note = (step: string) => log.push(`${((Date.now() - startedAt) / 1000).toFixed(1)}s ${step}`);
-  if (await cache.get("cooldown") || await cache.get("lock")) return;
+  if (await cache.get("cooldown") || await cache.get("lock") || await cache.get("rest")) return;
   await cache.set("lock", startedAt, { ttl: LOCK_S });
   try {
     let search = await cache.get("search") as StoredSearch | null;
@@ -277,6 +280,7 @@ async function crawl(): Promise<void> {
   } catch (error) {
     note(`crawl failed: ${error instanceof Error ? error.message.split("\n")[0] : error}`);
   } finally {
+    await cache.set("rest", Date.now(), { ttl: CRAWL_REST_S }).catch(() => undefined);
     await cache.delete("lock").catch(() => undefined);
     await cache.set("last-crawl", log, { ttl: 24 * 60 * 60 }).catch(() => undefined);
   }
